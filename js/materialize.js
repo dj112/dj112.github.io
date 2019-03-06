@@ -1592,6 +1592,19 @@ if (Vel) {
     });
   };
 
+  $(document).ready(function(){
+    $('.slider').slider();
+  });
+
+  $(document).ready(function(){
+    $('ul.tabs').tabs('select_tab', 'tab_id');
+  });
+        
+
+  $(document).ready(function(){
+    $('.parallax').parallax();
+  });
+
   $(document).ready(function () {
     $('.collapsible').collapsible();
   });
@@ -4027,6 +4040,8 @@ if (Vel) {
             }
           });
         }
+
+         
 
         $this.off('click.sidenav').on('click.sidenav', function () {
           if (menuOut === true) {
@@ -9991,13 +10006,14 @@ if (Vel) {
             padding: tapTargetTextPadding,
             verticalAlign: tapTargetTextAlign
           });
-
+          
           // Setting wave
           tapTargetWave.css({
             top: tapTargetWaveTop,
             left: tapTargetWaveLeft,
             width: tapTargetWaveWidth,
             height: tapTargetWaveHeight
+           
           });
         };
 

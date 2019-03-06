@@ -2881,6 +2881,7 @@ ul.staggered-list li {
 .page-footer {
   padding-top: 20px;
   color: #fff;
+  height: 100px;
   background-color: #ee6e73;
 }
 
@@ -4273,6 +4274,7 @@ nav .brand-logo {
   font-size: 2.1rem;
   padding: 1;
   text-shadow: 2px 1px black;
+  margin-left: 15px;
 }
 
 nav .brand-logo.center {
@@ -4717,15 +4719,14 @@ small {
 
 .card {
   position: relative;
-  margin: 0.5rem 0 1rem 0;
+  margin: 10px 10px 10px 10px;
   background-color: #fff;
   -webkit-transition: -webkit-box-shadow .25s;
   transition: -webkit-box-shadow .25s;
   transition: box-shadow .25s;
   transition: box-shadow .25s, -webkit-box-shadow .25s;
   border-radius: 2px;
-  margin-top: 10px;
-  margin-bottom: 10px;
+  
 }
 
 .card .card-title {
@@ -5723,7 +5724,7 @@ button.btn-floating {
   border-top: 1px solid #ddd;
   border-right: 1px solid #ddd;
   border-left: 1px solid #ddd;
-  margin: 0.5rem 0 1rem 0;
+  margin: 10px 10px 10px 10px;
 }
 
 .collapsible-header {
