@@ -2761,9 +2761,12 @@ video.responsive-video {
 }
 
 .parallax-container {
+  margin-left: 20px;
+  margin-right: 20px;
+
   position: relative;
   overflow: hidden;
-  height: 500px;
+  height: 350px;
 }
 
 .parallax-container .parallax {
@@ -2881,7 +2884,7 @@ ul.staggered-list li {
 .page-footer {
   padding-top: 20px;
   color: #fff;
-  height: 100px;
+  height: 70px;
   background-color: #ee6e73;
 }
 
@@ -3386,8 +3389,8 @@ nav ul a span.badge {
 }
 
 .container .row {
-  margin-left: -0.75rem;
-  margin-right: -0.75rem;
+  margin-left: 10px;
+  margin-right: 10px;
 }
 
 .section {
@@ -8098,7 +8101,8 @@ input[type=range]:focus::-ms-fill-upper {
 .slider {
   position: relative;
   height: 400px;
-  width: 100%;
+  margin-left: 20px;
+  margin-right: 20px;
 }
 
 .slider.fullscreen {
@@ -8148,9 +8152,10 @@ input[type=range]:focus::-ms-fill-upper {
   color: #fff;
   position: absolute;
   top: 15%;
-  left: 15%;
+  left: 5%;
+  right: 5%;
   width: 70%;
-  opacity: 0;
+  opacity: 0.8;
 }
 
 .slider .slides li .caption p {
@@ -8184,7 +8189,7 @@ input[type=range]:focus::-ms-fill-upper {
 }
 
 .slider .indicators .indicator-item.active {
-  background-color: #4CAF50;
+  background-color: rgb(245, 7, 7);
 }
 
 .carousel {
