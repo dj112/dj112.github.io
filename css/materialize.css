@@ -3370,9 +3370,9 @@ nav ul a span.badge {
 }
 
 .container {
-  margin: 0 auto;
+  margin-left: 20px;
+  margin-left: 20px;
   max-width: 1280px;
-  width: 90%;
 }
 
 @media only screen and (min-width: 601px) {
@@ -3734,6 +3734,7 @@ nav ul a span.badge {
     left: auto;
     right: auto;
   }
+
   .row .col.offset-m1 {
     margin-left: 8.3333333333%;
   }
@@ -5069,7 +5070,7 @@ small {
 
 .tabs .tab a:hover, .tabs .tab a.active {
   background-color: transparent;
-  color: #ee6e73;
+  color: #fff;
 }
 
 .tabs .tab.disabled a,
@@ -5082,7 +5083,7 @@ small {
   position: absolute;
   bottom: 0;
   height: 2px;
-  background-color: #f6b2b5;
+  background-color: #ff0000;
   will-change: left, right;
 }
 
