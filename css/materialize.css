@@ -3365,6 +3365,7 @@ nav ul a span.badge {
 .material-icons {
   text-rendering: optimizeLegibility;
   -webkit-font-feature-settings: 'liga';
+
      -moz-font-feature-settings: 'liga';
           font-feature-settings: 'liga';
 }
@@ -5137,6 +5138,8 @@ small {
           transform-origin: 50% 0%;
   visibility: hidden;
 }
+
+
 
 .btn, .btn-large,
 .btn-flat {
