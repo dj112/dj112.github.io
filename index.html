@@ -439,6 +439,7 @@
     'img/film4.jpg',
     'img/film5.jpg',
     'img/film6.jpg',
+    'img/film7.jpg',
   ];
 
   // ════════════════════════════════════════════════
@@ -460,14 +461,14 @@
     frame.className = 'film-frame';
     frame.innerHTML = `
       <div class="sprockets">
-        ${Array(6).fill('<div class="sprocket"></div>').join('')}
+        ${Array(7).fill('<div class="sprocket"></div>').join('')}
       </div>
       <div class="frame-img-wrap">
         <img src="${src}" alt="frame ${frameNum}" loading="lazy" draggable="false"
              onerror="this.parentElement.innerHTML='<div class=\\'placeholder-img\\'>photo ${frameNum}</div>'" />
       </div>
       <div class="sprockets">
-        ${Array(6).fill('<div class="sprocket"></div>').join('')}
+        ${Array(7).fill('<div class="sprocket"></div>').join('')}
       </div>
       <div class="frame-label">▲ ${frameNum} ▲</div>
     `;
