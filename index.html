@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>For You ♥</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ─── Reset & Base ─────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --cream:   #f5ece2;
+      --rose:    #c9526b;
+      --wine:    #7b1a35;
+      --ink:     #1a0a0f;
+      --gold:    #c8974a;
+      --film-bg: #0d0d0d;
+    }
+
+    @font-face {
+        font-family: 'jenson';
+        src: url('fonts/jenson.ttf') format('opentype');
+        font-weight: 300;
+        font-style: light;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--ink);
+      color: var(--cream);
+      font-family: 'jenson', Georgia, serif;
+      overflow: hidden;
+    }
+
+    /* ─── Noise overlay (film grain) ───────────── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.06'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 512px 512px;
+      opacity: 0.45;
+    }
+
+    /* ─── Main horizontal scroll container ─────── */
+    #scroll-container {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+      overflow-x: scroll;
+      overflow-y: hidden;
+      scroll-snap-type: x mandatory;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    #scroll-container::-webkit-scrollbar { display: none; }
+
+    /* ─── Each section ──────────────────────────── */
+    .panel {
+      flex: 0 0 100vw;
+      height: 100vh;
+      scroll-snap-align: start;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* Photo background */
+    .panel-bg {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: top;
+      transform: scale(1.08);
+      transition: transform 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      filter: brightness(0.65) saturate(0.9);
+    }
+    .panel.active .panel-bg {
+      transform: scale(1);
+    }
+
+    /* Gradient vignette */
+    .panel::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, transparent 30%, rgba(10,0,5,0.7) 100%);
+      z-index: 1;
+    }
+
+    /* ─── Text content ───────────────────────────── */
+    .panel-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      padding: 2rem;
+      max-width: 680px;
+    }
+
+    .eyebrow {
+      font-family: 'IM Fell English', serif;
+      font-style: italic;
+      font-size: clamp(0.75rem, 1.5vw, 0.95rem);
+      letter-spacing: 0.3em;
+      color: var(--gold);
+      text-transform: uppercase;
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity 0.9s 0.2s ease, transform 0.9s 0.2s ease;
+    }
+
+    .headline {
+      font-size: clamp(2.2rem, 6vw, 5rem);
+      font-weight: 300;
+      line-height: 1.1;
+      color: var(--cream);
+      margin: 0.6rem 0 1rem;
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 1s 0.5s ease, transform 1s 0.5s ease;
+    }
+    .headline em {
+      font-style: italic;
+      color: var(--rose);
+    }
+
+    .body-text {
+      font-family: 'jenson', serif;
+      /* FIXED: was clamp(5rem, 2vw, 1.25rem) — min was larger than max */
+      font-size: clamp(1.8rem, 5vw, 5rem);
+      font-weight: 300;
+      line-height: 1.75;
+      color: rgba(245,236,226,0.82);
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity 1s 0.85s ease, transform 1s 0.85s ease;
+    }
+
+    /* Trigger animations when panel is active */
+    .panel.active .eyebrow,
+    .panel.active .headline,
+    .panel.active .body-text {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ─── Navigation dots ───────────────────────── */
+    #nav-dots {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 0.6rem;
+      z-index: 100;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: rgba(245,236,226,0.3);
+      border: 1px solid rgba(245,236,226,0.4);
+      cursor: pointer;
+      transition: background 0.3s, transform 0.3s;
+    }
+    .dot.active {
+      background: var(--rose);
+      transform: scale(1.4);
+      border-color: var(--rose);
+    }
+
+    /* ─── Scroll hint arrow ─────────────────────── */
+    #scroll-hint {
+      position: fixed;
+      right: 2rem;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.3rem;
+      opacity: 1;
+      transition: opacity 0.5s;
+    }
+    #scroll-hint span {
+      font-size: 0.65rem;
+      letter-spacing: 0.2em;
+      color: rgba(245,236,226,0.4);
+      writing-mode: vertical-rl;
+    }
+    #scroll-hint svg {
+      animation: bounce-right 1.4s infinite ease-in-out;
+    }
+    @keyframes bounce-right {
+      0%, 100% { transform: translateX(0); }
+      50%       { transform: translateX(6px); }
+    }
+
+    /* ─── Film Strip Panel ──────────────────────── */
+    #film-panel {
+      background: var(--film-bg);
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .film-title {
+      font-family: 'jenson', serif;
+      font-style: light;
+      font-size: clamp(1.4rem, 5vw, 2.5rem);
+      color: var(--cream);
+      letter-spacing: 0.01em;
+      margin-top: 1%;
+      margin-bottom: 1.5rem;
+      opacity: 0;
+      transition: opacity 1s 0.3s ease;
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      padding: 0 1rem;
+    }
+    #film-panel.active .film-title { opacity: 1; }
+
+    /* Film strip wrapper — cursor signals draggability */
+    .film-track-wrapper {
+      position: relative;
+      width: 100%;
+      overflow: hidden;
+      z-index: 2;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .film-track-wrapper.dragging { cursor: grabbing; }
+
+    /* Fade edges */
+    .film-track-wrapper::before,
+    .film-track-wrapper::after {
+      content: '';
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 80px;
+      z-index: 3;
+      pointer-events: none;
+    }
+    .film-track-wrapper::before {
+      left: 0;
+      background: linear-gradient(to right, var(--film-bg), transparent);
+    }
+    .film-track-wrapper::after {
+      right: 0;
+      background: linear-gradient(to left, var(--film-bg), transparent);
+    }
+
+    /* Film track — animation is driven by JS rAF, NOT a CSS keyframe */
+    .film-track {
+      display: flex;
+      gap: 0;
+      will-change: transform;
+    }
+
+    /* Individual film frame */
+    .film-frame {
+      flex: 0 0 auto;
+      width: 440px;
+      background: #111;
+      border: 3px solid #222;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* Sprocket holes row */
+    .sprockets {
+      display: flex;
+      width: 100%;
+      justify-content: space-around;
+      padding: 4px 0;
+      background: #0a0a0a;
+    }
+    .sprocket {
+      width: 12px;
+      height: 8px;
+      background: #2a2a2a;
+      border-radius: 2px;
+      border: 1px solid #1a1a1a;
+    }
+
+    /* The actual photo inside the frame */
+    .frame-img-wrap {
+      width: 100%;
+      height: 240px;
+      overflow: hidden;
+      position: relative;
+      background: #1a1a1a;
+    }
+    .frame-img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: sepia(0.15) contrast(1.05);
+      transition: filter 0.3s;
+      pointer-events: none;
+    }
+    .film-frame:hover .frame-img-wrap img {
+      filter: sepia(0) contrast(1.1);
+    }
+
+    /* Frame number label */
+    .frame-label {
+      font-size: 0.55rem;
+      letter-spacing: 0.2em;
+      color: rgba(200,151,74,0.6);
+      padding: 3px 0 4px;
+      font-family: 'Courier New', monospace;
+    }
+
+    /* Placeholder styling */
+    .placeholder-img {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #2a1520, #1a0a0f);
+      color: rgba(200,151,74,0.4);
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      text-align: center;
+      padding: 0.5rem;
+    }
+
+    /* ─── Mobile responsive ─────────────────────── */
+    @media (max-width: 600px) {
+      .panel-content { padding: 1.2rem; }
+      .body-text { font-size: clamp(1.5rem, 7vw, 3rem); }
+      .film-frame { width: 220px; }
+      .frame-img-wrap { height: 240px; }
+      .film-track-wrapper::before,
+      .film-track-wrapper::after { width: 40px; }
+      #scroll-hint { right: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="scroll-container">
+
+  <!-- ── PANEL 1 ── -->
+  <section class="panel active" data-index="0">
+    <div class="panel-bg" style="background-image: url('img/1.jpg');"></div>
+    <div class="panel-content">
+      <p class="body-text">In the midst of winter</p>
+    </div>
+  </section>
+
+  <!-- ── PANEL 2 ── -->
+  <section class="panel" data-index="1">
+    <div class="panel-bg" style="background-image: url('img/2.jpg');"></div>
+    <div class="panel-content">
+      <p class="body-text">I found there was</p>
+    </div>
+  </section>
+
+  <!-- ── PANEL 3 ── -->
+  <section class="panel" data-index="2">
+    <div class="panel-bg" style="background-image: url('img/3.jpg');"></div>
+    <div class="panel-content">
+      <p class="body-text">Within You</p>
+    </div>
+  </section>
+
+  <!-- ── PANEL 4 ── -->
+  <section class="panel" data-index="3">
+    <div class="panel-bg" style="background-image: url('img/4.jpg');"></div>
+    <div class="panel-content">
+      <p class="body-text">Within Me</p>
+    </div>
+  </section>
+
+  <!-- ── PANEL 5 ── -->
+  <section class="panel" data-index="4">
+    <div class="panel-bg" style="background-image: url('img/5.jpg');"></div>
+    <div class="panel-content">
+      <p class="body-text">Within Us</p>
+    </div>
+  </section>
+
+  <!-- ── PANEL 6 ── -->
+  <section class="panel" data-index="5">
+    <div class="panel-bg" style="background-image: url('img/6.jpg');"></div>
+    <div class="panel-content">
+      <p class="body-text">An invincible summer.</p>
+    </div>
+  </section>
+
+  <!-- ── PANEL 7 — FILM STRIP ── -->
+  <section class="panel" data-index="6" id="film-panel">
+    <div class="panel-bg" style="background-image: url('img/7.jpg');"></div>
+    <p class="film-title">Lenochka through my lens</p>
+    <div class="film-track-wrapper" id="film-wrapper">
+      <div class="film-track" id="film-track"></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- Nav dots -->
+<div id="nav-dots">
+  <div class="dot active" data-target="0"></div>
+  <div class="dot" data-target="1"></div>
+  <div class="dot" data-target="2"></div>
+  <div class="dot" data-target="3"></div>
+  <div class="dot" data-target="4"></div>
+  <div class="dot" data-target="5"></div>
+  <div class="dot" data-target="6"></div>
+</div>
+
+
+
+<script>
+  // ════════════════════════════════════════════════
+  //  ✏️  Film strip photos
+  // ════════════════════════════════════════════════
+  const FILM_PHOTOS = [
+    'img/film1.jpg',
+    'img/film2.jpg',
+    'img/film3.jpg',
+    'img/film4.jpg',
+    'img/film5.jpg',
+    'img/film6.jpg',
+  ];
+
+  // ════════════════════════════════════════════════
+  //  ✏️  FILM SCROLL SPEED  (pixels per second)
+  //      30  = slow, dreamy
+  //      60  = default
+  //      120 = fast
+  // ════════════════════════════════════════════════
+  const FILM_SPEED = 30;
+
+  // ── Build film frames ──────────────────────────
+  // Triple the array so there's always enough track width to loop
+  const track   = document.getElementById('film-track');
+  const wrapper = document.getElementById('film-wrapper');
+
+  ;[...FILM_PHOTOS, ...FILM_PHOTOS, ...FILM_PHOTOS].forEach((src, i) => {
+    const frameNum = String((i % FILM_PHOTOS.length) + 1).padStart(2, '0');
+    const frame = document.createElement('div');
+    frame.className = 'film-frame';
+    frame.innerHTML = `
+      <div class="sprockets">
+        ${Array(6).fill('<div class="sprocket"></div>').join('')}
+      </div>
+      <div class="frame-img-wrap">
+        <img src="${src}" alt="frame ${frameNum}" loading="lazy" draggable="false"
+             onerror="this.parentElement.innerHTML='<div class=\\'placeholder-img\\'>photo ${frameNum}</div>'" />
+      </div>
+      <div class="sprockets">
+        ${Array(6).fill('<div class="sprocket"></div>').join('')}
+      </div>
+      <div class="frame-label">▲ ${frameNum} ▲</div>
+    `;
+    track.appendChild(frame);
+  });
+
+  // ── JS rAF film animation ──────────────────────
+  // Replaces CSS @keyframes entirely — fixes loop & enables drag
+  let filmOffset      = 0;
+  let loopWidth       = 0;   // = width of ONE full set of FILM_PHOTOS frames
+  let lastTime        = null;
+  let velocity        = FILM_SPEED;  // current px/sec
+  let isDragging      = false;
+  let dragStartX      = 0;
+  let dragStartOffset = 0;
+  let lastDragX       = 0;
+  let lastDragTime    = 0;
+
+  function getLoopWidth() {
+    const first = track.firstElementChild;
+    return first ? first.offsetWidth * FILM_PHOTOS.length : 0;
+  }
+
+  function filmLoop(ts) {
+    if (loopWidth === 0) loopWidth = getLoopWidth();
+
+    if (!isDragging) {
+      if (lastTime !== null) {
+        const dt = (ts - lastTime) / 1000;
+        // Ease velocity back to FILM_SPEED after a drag fling
+        velocity += (FILM_SPEED - velocity) * Math.min(dt * 4, 1);
+        filmOffset += velocity * dt;
+      }
+      lastTime = ts;
+    }
+
+    // Wrap at exactly one set of photos → seamless loop
+    if (loopWidth > 0) {
+      filmOffset = ((filmOffset % loopWidth) + loopWidth) % loopWidth;
+    }
+
+    track.style.transform = `translateX(${-filmOffset}px)`;
+    requestAnimationFrame(filmLoop);
+  }
+  requestAnimationFrame(filmLoop);
+
+  // ── Film drag — mouse ──────────────────────────
+  wrapper.addEventListener('mousedown', e => {
+    isDragging      = true;
+    dragStartX      = e.clientX;
+    dragStartOffset = filmOffset;
+    lastDragX       = e.clientX;
+    lastDragTime    = performance.now();
+    wrapper.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    filmOffset = dragStartOffset + (dragStartX - e.clientX);
+    const now  = performance.now();
+    const dt   = (now - lastDragTime) / 1000 || 0.016;
+    velocity   = (lastDragX - e.clientX) / dt;
+    lastDragX  = e.clientX;
+    lastDragTime = now;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    lastTime   = null;
+    wrapper.classList.remove('dragging');
+  });
+
+  // ── Film drag — touch ──────────────────────────
+  // stopPropagation prevents triggering the panel-level swipe
+  wrapper.addEventListener('touchstart', e => {
+    isDragging      = true;
+    dragStartX      = e.touches[0].clientX;
+    dragStartOffset = filmOffset;
+    lastDragX       = e.touches[0].clientX;
+    lastDragTime    = performance.now();
+    e.stopPropagation();
+  }, { passive: true });
+
+  wrapper.addEventListener('touchmove', e => {
+    if (!isDragging) return;
+    filmOffset = dragStartOffset + (dragStartX - e.touches[0].clientX);
+    const now  = performance.now();
+    const dt   = (now - lastDragTime) / 1000 || 0.016;
+    velocity   = (lastDragX - e.touches[0].clientX) / dt;
+    lastDragX  = e.touches[0].clientX;
+    lastDragTime = now;
+    e.stopPropagation();
+  }, { passive: true });
+
+  wrapper.addEventListener('touchend', e => {
+    isDragging = false;
+    lastTime   = null;
+    e.stopPropagation();
+  }, { passive: true });
+
+  // Recalculate loop width if screen is resized
+  window.addEventListener('resize', () => { loopWidth = 0; });
+
+
+  // ════════════════════════════════════════════════
+  //  PANEL NAVIGATION
+  // ════════════════════════════════════════════════
+  const panels    = document.querySelectorAll('.panel');
+  const dots      = document.querySelectorAll('.dot');
+  const container = document.getElementById('scroll-container');
+  const hint      = document.getElementById('scroll-hint');
+
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.intersectionRatio > 0.5) {
+        const idx = +entry.target.dataset.index;
+        panels.forEach(p => p.classList.remove('active'));
+        dots.forEach(d => d.classList.remove('active'));
+        entry.target.classList.add('active');
+        dots[idx]?.classList.add('active');
+        hint.style.opacity = idx >= panels.length - 1 ? '0' : '1';
+      }
+    });
+  }, { root: container, threshold: 0.5 });
+
+  panels.forEach(p => io.observe(p));
+
+  dots.forEach(dot => {
+    dot.addEventListener('click', () => {
+      container.scrollTo({ left: +dot.dataset.target * window.innerWidth, behavior: 'smooth' });
+    });
+  });
+
+  document.addEventListener('keydown', e => {
+    const cur = Math.round(container.scrollLeft / window.innerWidth);
+    if (e.key === 'ArrowRight') container.scrollTo({ left: (cur + 1) * window.innerWidth, behavior: 'smooth' });
+    if (e.key === 'ArrowLeft')  container.scrollTo({ left: (cur - 1) * window.innerWidth, behavior: 'smooth' });
+  });
+
+  // Panel swipe — only fires if film wrapper didn't stopPropagation
+  let panelTouchStartX = 0;
+  container.addEventListener('touchstart', e => {
+    panelTouchStartX = e.touches[0].clientX;
+  }, { passive: true });
+
+  container.addEventListener('touchend', e => {
+    const dx  = panelTouchStartX - e.changedTouches[0].clientX;
+    const cur = Math.round(container.scrollLeft / window.innerWidth);
+    if (Math.abs(dx) > 40) {
+      container.scrollTo({ left: (cur + (dx > 0 ? 1 : -1)) * window.innerWidth, behavior: 'smooth' });
+    }
+  }, { passive: true });
+</script>
+
+</body>
+</html>
