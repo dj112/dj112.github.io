@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Allcorrect Sentiment Report Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app-shell">
+  <div class="toolbar no-print">
+    <div class="brand-lockup">
+      <div class="brand-mark"><span class="name">Allcorrect</span></div>
+      <span class="tag">Sentiment Report Generator</span>
+    </div>
+    <div class="toolbar-actions">
+      <label class="print-control" for="printMode">
+        <span>PDF content</span>
+        <select id="printMode">
+          <option value="report">Report only</option>
+          <option value="report-reviews">Report + reviews</option>
+        </select>
+      </label>
+      <button id="downloadBtn" class="primary" disabled>Print / Save PDF</button>
+    </div>
+  </div>
+
+  <div class="panel no-print" id="setupPanel">
+    <div class="panel-head">
+      <div>
+        <div class="step-label">Step 01</div>
+        <h2>Load the workbook</h2>
+      </div>
+      <p class="hint">The parser scans every sheet, prefers individual review rows when available, and falls back to the Region / Language sentiment table. Nothing is truncated.</p>
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <strong>Choose an .xlsx file</strong>
+      <span>or drag it here</span>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+    <div class="status-line" id="statusLine"></div>
+
+    <div class="panel-divider"></div>
+
+    <div class="panel-head details-head">
+      <div>
+        <div class="step-label">Step 02</div>
+        <h2>Review auto-filled report details</h2>
+      </div>
+      <p class="hint">Title, platform, publisher/studio and counts are filled only when the workbook exposes them. Publisher and both fetch-window dates are required; pick the dates from the calendar. “To” always starts as today.</p>
+    </div>
+
+    <div class="field-grid">
+      <div class="field">
+        <label>Game / project title</label>
+        <input id="f-gameTitle" placeholder="Game title">
+      </div>
+      <div class="field">
+        <label>Publisher / studio <span class="required-mark" aria-hidden="true">*</span></label>
+        <input id="f-publisher" placeholder="Required · auto-filled if found" required aria-required="true">
+      </div>
+      <div class="field">
+        <label>Platform / source</label>
+        <input id="f-platform" placeholder="Steam, App Store, Google Play…">
+      </div>
+      <div class="field">
+        <label>Prepared for</label>
+        <input id="f-preparedFor" placeholder="Client / recipient">
+      </div>
+      <div class="field span2">
+        <label>Cover subtitle (optional)</label>
+        <input id="f-subtitle" placeholder="Leave blank to omit, e.g. Localisation review analysis">
+      </div>
+      <div class="field span2">
+        <label>Product scope</label>
+        <select id="f-productFilter" disabled>
+          <option value="">All products</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="f-periodFrom">Fetch window from <span class="required-mark" aria-hidden="true">*</span></label>
+        <input id="f-periodFrom" type="date" required aria-required="true">
+      </div>
+      <div class="field">
+        <label for="f-periodTo">Fetch window to <span class="required-mark" aria-hidden="true">*</span></label>
+        <input id="f-periodTo" type="date" required aria-required="true">
+      </div>
+      <div class="field">
+        <label>Reviews fetched</label>
+        <input id="f-fetched" placeholder="Auto-filled if present">
+      </div>
+      <div class="field">
+        <label>Reviews analysed</label>
+        <input id="f-analysed" placeholder="Auto-filled if present">
+      </div>
+    </div>
+
+    <div class="panel-divider"></div>
+    <div class="panel-head details-head">
+      <div>
+        <div class="step-label">Step 03 · optional</div>
+        <h2>All-review language table</h2>
+      </div>
+      <p class="hint">Paste one language per line, e.g. “English (EN): 1724 (30.65%)” or “English, 1724”. Percentages are optional and recalculated from the counts. This box is independent of the workbook: it is never auto-filled, and it drives only the Aggregate distribution section at the end of the report, printed exactly as entered. Use the scope field to say which product(s) and period it covers.</p>
+    </div>
+    <div class="field-grid">
+      <div class="field span2">
+        <label>Language counts</label>
+        <textarea id="f-marketTable" rows="8" placeholder="English (EN): 1724 (30.65%)&#10;Spanish (ES): 804 (14.3%)&#10;Other: 12 (0.21%)"></textarea>
+      </div>
+      <div class="field span2">
+        <label>Table scope (product + period)</label>
+        <input id="f-marketScope" placeholder="e.g. all 7 products, 2026-03-01 to 2026-09-22">
+      </div>
+    </div>
+
+    <div class="panel-actions">
+      <button id="generateBtn" class="primary" disabled>Generate report</button>
+      <span class="action-note">The on-screen report always includes the full reviews section when review rows exist. Use “PDF content” above to print the report on its own or include the source reviews.</span>
+    </div>
+  </div>
+
+  <div id="report"></div>
+</div>
+
+  <script src="app.js"></script>
+</body>
+</html>
