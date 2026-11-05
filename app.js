@@ -33,11 +33,29 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 const Config = Object.freeze({
     brand: Object.freeze({
         site: 'allcorrectgames.com',
-        coverImage: 'cover-collage.png',
+        // Web-sized copy of cover-collage.png (2400px JPEG) so the page and saved HTML stay light.
+        coverImage: 'cover-collage.jpg',
         // Optional cover brand strip. Leave coverLogo blank to keep it hidden.
         coverLogo: '',
-        coverServices: 'Game localization · LQA · Voice-over · AI-assisted localization',
+        coverServices: 'Game localization, LQA, voice-over and AI-assisted localization',
+        // Closing call to action. Leave contactEmail blank to drop the block.
+        contactEmail: 'info@allcorrectgames.com',
+        contactEyebrow: 'Get in touch',
+        contactHeadline: 'Want a language plan built on this data?',
+        contactText: 'We can turn this report into a scoped localization plan for your title, with your own sales and wishlist data alongside the review signal.',
     }),
+    // Cumulative review share each coverage tier fills up to (all-review table only).
+    coverage: Object.freeze([
+        { label: 'Tier 1', name: 'Core reach', upTo: 80 },
+        { label: 'Tier 2', name: 'Growth', upTo: 95 },
+        { label: 'Tier 3', name: 'Long tail', upTo: 98 },
+    ]),
+    // Region donut: largest N regions get their own slice, the rest fold into "Other".
+    regionSlices: 5,
+    // Most generated takeaways shown in the "What the data says" section.
+    findingsCount: 6,
+    // A supported language under this review share is called out as "quiet".
+    quietShare: 0.5,
     statusOrder: ['negative', 'request', 'positive'],
     statusLabels: { negative: 'Negative', request: 'Request', positive: 'Positive' },
     statusSynonyms: {
@@ -102,7 +120,16 @@ class Text {
     static titleCase(s) { return String(s || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()); }
     static clip(s, max) {
         const t = String(s || '').replace(/\s+/g, ' ').trim();
-        return t.length <= max ? t : t.slice(0, max).replace(/\s+\S*$/, '') + '…';
+        return t.length <= max ? t : t.slice(0, max).replace(/\s+\S*$/, '') + '...';
+    }
+    /** Whole review count from a pasted cell: "1375", "1,375", "1 375", "1.375" -> 1375. NaN if not a number. */
+    static count(v) {
+        if (typeof v === 'number')
+            return Number.isFinite(v) ? Math.round(v) : NaN;
+        const s = String(v ?? '').replace(/[  ]/g, ' ').trim();
+        if (/^\d{1,3}([ ,.']\d{3})+$/.test(s))
+            return parseInt(s.replace(/\D/g, ''), 10);
+        return /^\d+(\.\d+)?$/.test(s) ? Math.round(parseFloat(s)) : NaN;
     }
 }
 class Fmt {
@@ -112,7 +139,28 @@ class Fmt {
     }
     /** "42.3%" (two decimals under 1%). */
     static share(v) { return (v > 0 && v < 1 ? v.toFixed(2) : v.toFixed(1)) + '%'; }
-    static dateRange(from, to) { return (!from && !to) ? '' : `${from || '—'} : ${to || '—'}`; }
+    /** "42.3%" always one decimal, for headlines. */
+    static pct(v) { return (Number(v) || 0).toFixed(1) + '%'; }
+    static dateRange(from, to) { return [from, to].filter(Boolean).join(' to '); }
+}
+/** Plain-English helpers for generated sentences. */
+class Words {
+    static NUMBERS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    /** "Four languages", "12 languages". */
+    static count(n, noun, capital = false) {
+        const word = n <= 10 ? Words.NUMBERS[n] : Fmt.int(n);
+        const text = `${word} ${noun}${n === 1 ? '' : 's'}`;
+        return capital ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+    }
+    /** "A, B and C". */
+    static list(items) {
+        const a = items.filter(Boolean);
+        return a.length <= 1 ? (a[0] || '') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`;
+    }
+    static ordinal(n) {
+        const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+        return n + (s[(v - 20) % 10] || s[v] || s[0]);
+    }
 }
 class Dates {
     static todayISO() {
@@ -294,60 +342,285 @@ class SentimentAnalysis {
         return new SentimentAnalysis(rows, statusDefs);
     }
 }
-/** All-review language counts (every review, not just localisation-tagged ones). */
+/**
+ * All-review counts (every review, not just localisation-tagged ones), pasted in Step 03.
+ *
+ * Accepts, in any mix:
+ *   - a table copied from a spreadsheet or export, tab / | / ; separated, with a header row
+ *     naming Language and Reviews, plus optional Region, % share and Supported / Localized columns;
+ *   - metadata lines before the table ("Game<TAB>Wanderburg", "Fetched: 2026-11-05");
+ *   - a Total row (kept to reconcile, never counted);
+ *   - a second Region / Reviews summary table (kept to reconcile, never counted twice);
+ *   - simple lines with no header, e.g. "English, 1724" or "English (EN): 1,724 (30.65%)".
+ * Shares are always recomputed from the counts.
+ */
 class MarketTable {
-    constructor(langs, total) {
-        this.langs = langs;
-        this.total = total;
-    }
-    static from(rows) {
-        if (!rows || !rows.length)
-            return null;
-        const total = rows.reduce((sum, r) => sum + r.count, 0);
-        if (!total)
-            return null;
-        const langs = rows
-            .map(r => ({ language: r.language, count: r.count, share: r.count / total * 100 }))
-            .sort((a, b) => b.count - a.count);
-        return new MarketTable(langs, total);
-    }
-    /** Parses pasted lines such as "English, 1724" or "English (EN): 1,724 (30.65%)". Shares are always recomputed from the counts. */
-    static parseText(text) {
-        const map = new Map();
-        String(text || '').split(/\r?\n/).forEach(line => {
-            // Drop a trailing share such as "(30.65%)" before reading the count.
-            const l = line.trim().replace(/\s*[(\[]?\s*\d+(?:[.,]\d+)?\s*%\s*[)\]]?\s*$/, '').trim();
-            if (!l)
+    static HEAD = {
+        language: ['language', 'languages', 'lang', 'review language'],
+        region: ['region', 'regions', 'market', 'area'],
+        count: ['reviews', 'review count', 'reviews count', 'count', 'total reviews', 'number of reviews', 'n', 'total'],
+        share: ['%', 'share', '% of total', 'percent', 'percentage', '% share'],
+        supported: ['supported', 'localized', 'localised', 'localization', 'localisation', 'loc', 'support'],
+    };
+    static META_KEYS = {
+        'app id': 'appId', 'appid': 'appId', 'steam app id': 'appId', 'app': 'appId',
+        'game': 'game', 'game title': 'game', 'title': 'game', 'product': 'game',
+        'fetched': 'fetched', 'fetched at': 'fetched', 'fetch date': 'fetched', 'date': 'fetched', 'snapshot': 'fetched',
+        'source': 'source', 'platform': 'platform', 'store': 'platform', 'publisher': 'publisher', 'developer': 'publisher',
+    };
+    static YES = /^(yes|y|true|supported|localized|localised|full|full audio|text|interface|1|✓|✔|x)$/i;
+    static NO = /^(no|n|false|unsupported|none|not supported|0|-)$/i;
+    static TOTAL = /^(grand\s+)?totals?$|^all(\s+languages)?$|^sum$/i;
+    constructor(parsed) {
+        this.meta = parsed.meta;
+        this.declaredTotal = parsed.declaredTotal;
+        this.regionSummary = parsed.regionSummary;
+        this.total = parsed.rows.reduce((sum, r) => sum + r.count, 0);
+        this.hasSupport = parsed.rows.some(r => r.supported !== null);
+        this.langs = parsed.rows
+            .map(r => ({ ...r, share: this.total ? r.count / this.total * 100 : 0 }))
+            .sort((a, b) => (b.count - a.count) || (a.order - b.order));
+        this.activeLangs = this.langs.filter(l => l.count > 0);
+        const regionMap = new Map();
+        this.langs.forEach(l => {
+            if (!l.region)
                 return;
-            const m = l.match(/^(.+?)\s*[\t;,:|]\s*(\d[\d\s.,]*)\s*$/) || l.match(/^(.*[^\d\s])\s+(\d[\d,\s]*)$/);
-            if (!m)
-                return;
-            const language = m[1].trim();
-            const count = parseInt(String(m[2]).replace(/\D/g, ''), 10);
-            if (!language || !Number.isFinite(count))
-                return;
-            map.set(language, (map.get(language) || 0) + count);
+            if (!regionMap.has(l.region))
+                regionMap.set(l.region, { name: l.region, count: 0, languages: [], order: regionMap.size });
+            const g = regionMap.get(l.region);
+            g.count += l.count;
+            g.languages.push(l);
         });
-        return [...map.entries()].map(([language, count]) => ({ language, count }));
+        this.regions = [...regionMap.values()]
+            .map(g => ({ ...g, share: this.total ? g.count / this.total * 100 : 0, activeLanguages: g.languages.filter(l => l.count > 0).length }))
+            .sort((a, b) => (b.count - a.count) || (a.order - b.order));
+        this.hasRegions = this.regions.length >= 2;
+    }
+    static from(parsed) {
+        if (!parsed || !parsed.rows || !parsed.rows.length)
+            return null;
+        const table = new MarketTable(parsed);
+        return table.total ? table : null;
+    }
+    share(n) { return this.total ? n / this.total * 100 : 0; }
+    get supported() { return this.activeLangs.filter(l => l.supported === true); }
+    get unsupported() { return this.activeLangs.filter(l => l.supported === false); }
+    /** Top languages, added largest first, until each cumulative threshold in Config.coverage is met. */
+    tiers(defs = Config.coverage) {
+        const active = this.activeLangs;
+        const tiers = [];
+        let i = 0, reach = 0;
+        defs.forEach(def => {
+            const langs = [];
+            while (i < active.length && reach < def.upTo - 1e-9) {
+                langs.push(active[i]);
+                reach += active[i].share;
+                i++;
+            }
+            if (langs.length)
+                tiers.push({ ...def, langs, reach, added: langs.reduce((s, l) => s + l.share, 0), count: langs.reduce((s, l) => s + l.count, 0) });
+        });
+        const rest = active.slice(i);
+        return { tiers, rest, restShare: rest.reduce((s, l) => s + l.share, 0) };
+    }
+    /** Differences between the rows and the totals the source itself printed. */
+    reconciliation() {
+        const notes = [];
+        if (this.declaredTotal && this.declaredTotal !== this.total)
+            notes.push(`Reconciliation: the language rows sum to ${Fmt.int(this.total)}, while the source's total row says ${Fmt.int(this.declaredTotal)}. This report uses the row sums throughout.`);
+        if (this.hasRegions && this.regionSummary.length) {
+            const off = this.regionSummary.filter(s => {
+                const r = this.regions.find(x => Text.key(x.name) === Text.key(s.region));
+                return r && r.count !== s.count;
+            });
+            if (off.length)
+                notes.push(`Reconciliation: the source's region subtotals differ from its language rows for ${Words.list(off.map(o => o.region))}. This report uses the language rows.`);
+        }
+        return notes;
+    }
+    /** One line for the setup panel, so the person pasting sees what was understood. */
+    describe() {
+        const bits = [`${Fmt.int(this.total)} reviews in ${Words.count(this.activeLangs.length, 'language')}`];
+        if (this.hasRegions)
+            bits.push(`${Words.count(this.regions.length, 'region')}`);
+        if (this.hasSupport)
+            bits.push(`supported flag for ${this.langs.filter(l => l.supported !== null).length} rows`);
+        const meta = ['game', 'appId', 'fetched', 'source'].filter(k => this.meta[k]);
+        if (meta.length)
+            bits.push(`metadata: ${meta.map(k => ({ game: 'game', appId: 'app ID', fetched: 'fetch date', source: 'source' }[k])).join(', ')}`);
+        if (this.declaredTotal)
+            bits.push(this.declaredTotal === this.total ? 'total row matches' : `total row says ${Fmt.int(this.declaredTotal)}`);
+        return 'Read ' + bits.join('; ') + '.';
+    }
+    /** Short provenance line built from the metadata lines, e.g. "Wanderburg (App ID 3624140), fetched 2026-11-05 14:32". */
+    autoScope() {
+        const m = this.meta;
+        const head = [m.game, m.appId ? `App ID ${m.appId}` : ''].filter(Boolean);
+        const name = head.length === 2 ? `${head[0]} (${head[1]})` : head[0] || '';
+        return [name, m.fetched ? `fetched ${m.fetched}` : ''].filter(Boolean).join(', ');
+    }
+    // ---------- Parsing ----------
+    /** Exact header match first, then a header that starts with an alias ("Reviews (all)"). */
+    static findCol(cells, aliases) {
+        const exact = cells.findIndex(c => aliases.includes(c));
+        if (exact >= 0)
+            return exact;
+        return cells.findIndex(c => aliases.some(a => a.length > 2 && (c.startsWith(a + ' ') || c.startsWith(a + '('))));
+    }
+    static splitter(line) {
+        if (line.includes('\t'))
+            return '\t';
+        if (line.includes('|'))
+            return '|';
+        if (line.includes(';'))
+            return ';';
+        return null;
+    }
+    static split(line, sep) {
+        const cells = sep ? line.split(sep) : line.trim().split(/\s{2,}/);
+        return cells.map(c => c.replace(/ /g, ' ').trim()).filter((c, i, a) => sep !== '|' || (i > 0 && i < a.length - 1) || c !== '');
+    }
+    /** Header row -> column map, or null. */
+    static header(cells) {
+        const n = cells.map(c => Text.normalize(c).replace(/[:*]+$/, ''));
+        if (n.some(c => Text.count(c) >= 0))
+            return null;
+        const H = MarketTable.HEAD;
+        const col = {
+            language: MarketTable.findCol(n, H.language),
+            region: MarketTable.findCol(n, H.region),
+            count: MarketTable.findCol(n, H.count),
+            share: MarketTable.findCol(n, H.share),
+            supported: MarketTable.findCol(n, H.supported),
+        };
+        if (col.count < 0 || (col.language < 0 && col.region < 0))
+            return null;
+        return { ...col, mode: col.language >= 0 ? 'languages' : 'regions' };
+    }
+    static support(v) {
+        const s = String(v ?? '').trim();
+        if (!s)
+            return null;
+        if (MarketTable.YES.test(s))
+            return true;
+        if (MarketTable.NO.test(s))
+            return false;
+        return null;
+    }
+    static metaLine(line, cells) {
+        let key, value;
+        if (cells && cells.length === 2) {
+            [key, value] = cells;
+        }
+        else {
+            const m = line.match(/^\s*([A-Za-z][A-Za-z ]{1,20}?)\s*[:=]\s*(.+)$/);
+            if (!m)
+                return null;
+            [, key, value] = m;
+        }
+        const field = MarketTable.META_KEYS[Text.normalize(key).replace(/:$/, '')];
+        return field && String(value).trim() ? { field, value: String(value).trim() } : null;
+    }
+    /** Simple header-less line: "English, 1724" or "English (EN): 1,724 (30.65%)". */
+    static legacyLine(line) {
+        const l = line.trim().replace(/\s*[(\[]?\s*\d+(?:[.,]\d+)?\s*%\s*[)\]]?\s*$/, '').trim();
+        const m = l.match(/^(.+?)\s*[\t;,:|]\s*(\d[\d\s.,]*)\s*$/) || l.match(/^(.*[^\d\s])\s+(\d[\d,\s]*)$/);
+        if (!m)
+            return null;
+        const language = m[1].trim();
+        const count = parseInt(String(m[2]).replace(/\D/g, ''), 10);
+        return language && Number.isFinite(count) ? { language, count } : null;
+    }
+    static parse(text) {
+        const out = { rows: [], meta: {}, declaredTotal: null, regionSummary: [] };
+        const tableRows = new Map(), legacyRows = new Map();
+        let cols = null, sep = null, lastRegion = '', sawHeader = false;
+        const add = (map, region, language, count, supported) => {
+            const key = `${Text.key(region)}\u0000${Text.key(language)}`;
+            if (!map.has(key))
+                map.set(key, { region, language, count: 0, supported: null, order: map.size });
+            const row = map.get(key);
+            row.count += count;
+            if (supported !== null)
+                row.supported = supported;
+        };
+        String(text || '').split(/\r?\n/).forEach(raw => {
+            const line = raw.replace(/ /g, ' ');
+            if (!line.trim()) {
+                lastRegion = '';
+                return;
+            }
+            const lineSep = MarketTable.splitter(line);
+            const cells = MarketTable.split(line, lineSep);
+            const head = MarketTable.header(cells);
+            if (head) {
+                cols = head;
+                sep = lineSep;
+                sawHeader = true;
+                lastRegion = '';
+                return;
+            }
+            if (cols && cells.length >= 2 && (lineSep === sep || cells.length > 2)) {
+                const at = i => (i >= 0 ? cells[i] ?? '' : '');
+                const isTotal = [at(cols.language), at(cols.region), cells[0]].some(c => MarketTable.TOTAL.test(String(c).trim()));
+                const count = Text.count(at(cols.count));
+                if (isTotal) {
+                    if (cols.mode === 'languages' && Number.isFinite(count))
+                        out.declaredTotal = count;
+                    return;
+                }
+                if (!Number.isFinite(count))
+                    return;
+                if (cols.mode === 'regions') {
+                    const region = at(cols.region);
+                    if (region)
+                        out.regionSummary.push({ region, count });
+                    return;
+                }
+                const language = at(cols.language);
+                if (!language)
+                    return;
+                const region = at(cols.region) || (cols.region >= 0 ? lastRegion : '');
+                if (region)
+                    lastRegion = region;
+                add(tableRows, region, language, count, MarketTable.support(at(cols.supported)));
+                return;
+            }
+            const meta = MarketTable.metaLine(line, cells.length === 2 ? cells : null);
+            if (meta) {
+                if (!out.meta[meta.field])
+                    out.meta[meta.field] = meta.value;
+                return;
+            }
+            if (sawHeader)
+                return;
+            const legacy = MarketTable.legacyLine(line);
+            if (legacy && !MarketTable.TOTAL.test(legacy.language))
+                add(legacyRows, '', legacy.language, legacy.count, null);
+            else if (legacy)
+                out.declaredTotal = legacy.count;
+        });
+        out.rows = [...(sawHeader ? tableRows : legacyRows).values()];
+        return out;
     }
 }
 /** Everything a section needs, in one object. */
 class ReportContext {
-    constructor({ analysis, meta, reviews, marketRows = [], marketScope = '', filtered = false }) {
+    constructor({ analysis, meta, reviews, market = null, marketScope = '', filtered = false }) {
         this.analysis = analysis;
         this.statusDefs = analysis.statusDefs;
         this.meta = meta;
         this.reviews = reviews;
         this.filtered = filtered;
-        this.market = MarketTable.from(marketRows);
-        this.marketScope = marketScope;
+        this.market = MarketTable.from(market);
+        this.marketScope = marketScope || (this.market ? this.market.autoScope() : '');
         this.products = Lists.unique(reviews.map(r => r.product));
     }
     /** Notes for the person generating the report. Shown in the status line, never in the PDF. */
     warnings() {
         const out = [];
         if (this.market && !this.marketScope)
-            out.push('The language table has no scope label; say which product(s) and period it covers.');
+            out.push('The all-review table has no scope label; say which product(s) and period it covers.');
         return out;
     }
 }
@@ -621,7 +894,7 @@ class WorkbookParser {
         const known = { steam: 'Steam', 'app store': 'App Store', appstore: 'App Store', 'google play': 'Google Play', googleplay: 'Google Play' };
         return known[n.toLowerCase()] || Text.titleCase(n.replace(/[_-]+/g, ' '));
     }
-    /** Finds the window the reviews were FETCHED for. Accepts "A : B", "A → B", "A to B", two cells, or a range under the label. */
+    /** Finds the window the reviews were FETCHED for. Accepts "A : B", "A -> B", "A to B", two cells, or a range under the label. */
     scanFetchWindow() {
         const DATE = '(\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}|\\d{1,2}\\.\\d{1,2}\\.\\d{4})';
         const SEP = '\\s*(?::|→|➔|➜|➝|⟶|->|=>|–|—|-|~|to|and|until|through|thru)\\s*';
@@ -709,6 +982,49 @@ class Ui {
         reviews.forEach(r => { counts[r.statusKey] = (counts[r.statusKey] || 0) + 1; });
         return counts;
     }
+    /** Row of outlined hero-number tiles. items: [{ value, label }]. */
+    static kpis(items) {
+        const list = items.filter(Boolean);
+        if (!list.length)
+            return '';
+        const cols = list.length === 3 ? ' cols-3' : list.length >= 4 ? ' cols-4' : '';
+        return `<div class="kpi-grid${cols}">${list.map(k => `
+      <div class="kpi"><div class="kpi-value">${esc(k.value)}</div><div class="kpi-label">${esc(k.label)}</div></div>`).join('')}</div>`;
+    }
+    /** Grid of outlined text cards. items: [{ title, body }] (body may be an array of paragraphs). */
+    static cards(items, cols = 0) {
+        const list = items.filter(Boolean);
+        if (!list.length)
+            return '';
+        const n = cols || (list.length === 2 || list.length === 4 ? 2 : 3);
+        return `<div class="card-grid${n === 2 ? ' cols-2' : ''}">${list.map(c => `
+      <article class="info-card"><h3>${esc(c.title)}</h3>${[].concat(c.body).filter(Boolean).map(p => `<p>${esc(p)}</p>`).join('')}</article>`).join('')}</div>`;
+    }
+    /**
+     * Donut chart as inline SVG (works offline, prints, survives "Save HTML").
+     * slices: [{ name, value, cls }] where cls picks the series colour (s1..s5, s-other).
+     */
+    static donut(slices, { total, label = 'Reviews', title = '' } = {}) {
+        const S = 240, C = S / 2, R = 116, r = 74;
+        const sum = slices.reduce((s, x) => s + x.value, 0) || 1;
+        const pt = (rad, a) => `${(C + rad * Math.cos(a)).toFixed(2)} ${(C + rad * Math.sin(a)).toFixed(2)}`;
+        let a0 = -Math.PI / 2;
+        const segs = slices.filter(s => s.value > 0).map(s => {
+            const frac = s.value / sum;
+            const tip = `<title>${esc(s.name)}: ${Fmt.int(s.value)} (${Fmt.share(frac * 100)})</title>`;
+            if (frac >= 0.9999) {
+                return `<path class="donut-seg ${s.cls}" fill-rule="evenodd" d="M ${C - R} ${C} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0 Z M ${C - r} ${C} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z">${tip}</path>`;
+            }
+            const a1 = a0 + frac * 2 * Math.PI;
+            const large = frac > 0.5 ? 1 : 0;
+            const d = `M ${pt(R, a0)} A ${R} ${R} 0 ${large} 1 ${pt(R, a1)} L ${pt(r, a1)} A ${r} ${r} 0 ${large} 0 ${pt(r, a0)} Z`;
+            a0 = a1;
+            return `<path class="donut-seg ${s.cls}" d="${d}">${tip}</path>`;
+        }).join('');
+        return `<svg class="donut" viewBox="0 0 ${S} ${S}" role="img" aria-label="${esc(title)}">${segs}
+      <text class="donut-total" x="${C}" y="${C + 4}" text-anchor="middle">${Fmt.int(total)}</text>
+      <text class="donut-label" x="${C}" y="${C + 26}" text-anchor="middle">${esc(label.toUpperCase())}</text></svg>`;
+    }
 }
 /* ===== sections.js ===== */
 /* ============================================================
@@ -724,7 +1040,10 @@ class Ui {
      at the bottom of this file.
    ============================================================ */
 class Section {
-    constructor(ctx) { this.ctx = ctx; }
+    constructor(ctx) {
+        this.ctx = ctx;
+        this.number = 0; // set by ReportBody; printed as "01 · EYEBROW"
+    }
     // ---- Text slots (all optional; the base class returns "nothing") ----
     get eyebrow() { return ''; }
     get title() { return ''; }
@@ -738,8 +1057,10 @@ class Section {
     renderBody() { return ''; }
     headHtml() {
         const parts = [];
-        if (this.eyebrow)
-            parts.push(`<div class="eyebrow">${esc(this.eyebrow)}</div>`);
+        if (this.eyebrow) {
+            const num = this.number ? `${String(this.number).padStart(2, '0')} · ` : '';
+            parts.push(`<div class="eyebrow">${num}${esc(this.eyebrow)}</div>`);
+        }
         if (this.title)
             parts.push(`<h2 class="section-title">${Ui.title(this.title)}</h2>`);
         if (this.howToRead)
@@ -755,14 +1076,26 @@ class Section {
     }
 }
 // ------------------------------------------------------------
-// 1. Voice · sentiment (snapshot KPIs + mix bar)
+// 1. At a glance: KPI tiles + sentiment mix bar + top regions
 // ------------------------------------------------------------
 class VoiceSentimentSection extends Section {
-    get eyebrow() { return 'From the community'; }
+    get eyebrow() { return 'At a glance'; }
     get title() { return 'What players [[say]] about localisation'; }
-    languageStatement() {
-        const n = this.ctx.analysis.languages.length;
-        return n ? Ui.statement(Fmt.int(n), `${n === 1 ? 'language' : 'languages'} across the represented player-sentiment reviews`) : '';
+    get howToRead() {
+        const { analysis } = this.ctx;
+        return analysis.total ? `${Fmt.int(analysis.total)} localization-related reviews from the uploaded workbook, grouped by sentiment and region.` : '';
+    }
+    kpiTiles() {
+        const { analysis, market } = this.ctx;
+        const neg = analysis.totals.negative || 0;
+        const regions = analysis.regions.filter(r => r.name !== 'Unspecified').length;
+        return Ui.kpis([
+            analysis.total ? { value: Fmt.int(analysis.total), label: 'Tagged reviews' } : null,
+            analysis.languages.length ? { value: Fmt.int(analysis.languages.length), label: 'Review languages' } : null,
+            neg && analysis.total ? { value: Fmt.pct(neg / analysis.total * 100), label: 'Negative share' } : null,
+            market ? { value: Fmt.int(market.total), label: 'All reviews in scope' }
+                : regions > 1 ? { value: Fmt.int(regions), label: 'Regions' } : null,
+        ]);
     }
     regionBlock() {
         const regions = this.ctx.analysis.regionsByVolume.slice(0, 5);
@@ -779,7 +1112,7 @@ class VoiceSentimentSection extends Section {
     renderBody() {
         const { analysis, statusDefs } = this.ctx;
         return [
-            this.languageStatement(),
+            this.kpiTiles(),
             Ui.block(Ui.blockHead('All tagged reviews, split by sentiment') + Ui.legend(statusDefs) + Ui.sentimentBar(analysis.totals, statusDefs, analysis.total)),
             this.regionBlock(),
         ].join('');
@@ -1011,13 +1344,13 @@ class QuotesSection extends Section {
         <p>${esc(Text.clip(original, 340))}</p>
       </div>
       ${explanation ? `<div class="q-explanation"><div class="q-label">Explanation</div><p>${esc(Text.clip(explanation, 280))}</p></div>` : ''}
-      <div class="q-meta">${meta}${href ? `${meta ? ' · ' : ''}<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">source ↗</a>` : ''}</div>
+      <div class="q-meta">${meta}${href ? `${meta ? ' · ' : ''}<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Source</a>` : ''}</div>
     </article>`;
     }
     renderBody() { return `<div class="quote-grid">${this.pick().map(r => this.card(r)).join('')}</div>`; }
 }
 // ------------------------------------------------------------
-// 5. Detailed breakdown: region × review language
+// 5. Detailed breakdown: region x review language
 // ------------------------------------------------------------
 class BreakdownSection extends Section {
     get eyebrow() { return 'Zooming in'; }
@@ -1037,13 +1370,161 @@ class BreakdownSection extends Section {
     }
 }
 // ------------------------------------------------------------
-// 6. Aggregate distribution: every review by language.
-//    Independent of the workbook; it reads only the Step 3 language table.
+// Findings: plain-English takeaways computed from the figures.
+// Every sentence is a template filled with numbers; nothing is
+// generated by a model, so the report stays offline and token free.
+// To edit wording, change the strings below. Order = priority.
+// ------------------------------------------------------------
+class Findings {
+    static build(ctx) {
+        const out = [];
+        const m = ctx.market, a = ctx.analysis;
+        const push = f => { if (f) out.push(f); };
+        if (m) {
+            const { tiers } = m.tiers();
+            const t1 = tiers[0];
+            if (t1 && t1.langs.length < m.activeLangs.length)
+                push({
+                    title: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews`,
+                    body: `${Words.list(t1.langs.map(l => l.language))} account for ${Fmt.int(t1.count)} of ${Fmt.int(m.total)} reviews. This is the core of any language plan for this title.`,
+                });
+            if (m.hasSupport) {
+                const gaps = m.unsupported;
+                const gapCount = gaps.reduce((s, l) => s + l.count, 0);
+                const gapShare = m.share(gapCount);
+                const top = gaps[0];
+                if (top && gapShare >= 2)
+                    push({
+                        title: `${top.language} is the largest language without localization`,
+                        body: `${Fmt.int(top.count)} reviews, ${Fmt.share(top.share)} of the total, ranking ${Words.ordinal(m.activeLangs.indexOf(top) + 1)} of ${m.activeLangs.length} review languages. These players already buy and review the game without a version in their language.`,
+                    });
+                if (gaps.length && gapShare >= 2)
+                    push({
+                        title: `${Fmt.pct(gapShare)} of reviews come from unsupported languages`,
+                        body: `${Fmt.int(gapCount)} reviews across ${Words.count(gaps.length, 'language')} the game does not support, led by ${Words.list(gaps.slice(0, 3).map(l => l.language))}.`,
+                    });
+                else if (m.supported.length)
+                    push({
+                        title: `Supported languages cover ${Fmt.pct(m.share(m.supported.reduce((s, l) => s + l.count, 0)))} of reviews`,
+                        body: gaps.length
+                            ? `Only ${Fmt.int(gapCount)} reviews arrive in the ${Words.count(gaps.length, 'review language')} the game does not support, the largest being ${top.language} (${Fmt.int(top.count)}). The current language list already matches where reviewers are.`
+                            : 'Every review language in this table is supported. The current language list already matches where reviewers are.',
+                    });
+            }
+        }
+        if (a.total) {
+            const neg = a.totals.negative || 0, req = a.totals.request || 0, pos = a.totals.positive || 0;
+            if (neg) {
+                const tail = [req ? `${Fmt.int(req)} ask for a language` : '', pos ? `${Fmt.int(pos)} are positive` : ''].filter(Boolean);
+                push({
+                    title: `${Fmt.pct(neg / a.total * 100)} of tagged feedback is negative`,
+                    body: `${Fmt.int(neg)} of ${Fmt.int(a.total)} localization-related reviews are negative${tail.length ? `, ${Words.list(tail)}` : ''}.`,
+                });
+            }
+            const worst = a.languages.filter(l => (l.counts.negative || 0) > 0).sort((x, y) => y.counts.negative - x.counts.negative)[0];
+            if (worst && a.languages.length > 1)
+                push({
+                    title: `${worst.language} carries the most negative feedback`,
+                    body: `${Fmt.int(worst.counts.negative)} negative reviews, ${Fmt.pct(worst.counts.negative / worst.total * 100)} of the ${Fmt.int(worst.total)} tagged reviews in this language.`,
+                });
+            const requests = ctx.reviews.filter(r => r.statusKey === 'request');
+            const wanted = Lists.mode(requests.map(r => r.requestedLanguage));
+            if (wanted) {
+                const n = requests.filter(r => r.requestedLanguage.trim() === wanted).length;
+                push({
+                    title: `Players ask most often for ${wanted}`,
+                    body: `${Fmt.int(n)} of ${Fmt.int(requests.length)} language requests name ${wanted}.`,
+                });
+            }
+        }
+        if (m) {
+            const top = m.hasRegions ? m.regions.find(r => !/english/i.test(r.name)) : null;
+            if (top) {
+                const lead = top.languages.slice().sort((x, y) => y.count - x.count)[0];
+                push({
+                    title: `${top.name} is the largest region outside English`,
+                    body: `${Fmt.pct(top.share)} of reviews (${Fmt.int(top.count)}) across ${Words.count(top.activeLanguages, 'language')}, led by ${lead.language} with ${Fmt.int(lead.count)}.`,
+                });
+            }
+            const en = m.langs.find(l => /^english\b/i.test(l.language));
+            if (en && en.share >= 15)
+                push({
+                    title: 'English is the floor, not the ceiling',
+                    body: `English takes ${Fmt.pct(en.share)} of reviews. Many players outside English-speaking markets also write in English to be read widely, so read this share as reach rather than as the size of the English-speaking market.`,
+                });
+            const quiet = m.hasSupport ? m.langs.filter(l => l.supported === true && l.share < Config.quietShare) : [];
+            if (quiet.length)
+                push({
+                    title: quiet.length === 1 ? `${quiet[0].language} is supported but quiet` : 'Some supported languages stay quiet',
+                    body: `${Words.list(quiet.map(l => l.language))} ${quiet.length === 1 ? 'is' : 'are'} localized but each draws under ${Config.quietShare}% of reviews. Treat this as an open question about store visibility and marketing in those markets, not as proof of no audience.`,
+                });
+        }
+        return out.slice(0, Config.findingsCount);
+    }
+}
+// ------------------------------------------------------------
+// 0. What the data says (generated takeaways)
+// ------------------------------------------------------------
+class KeyFindingsSection extends Section {
+    get eyebrow() { return 'What the data says'; }
+    get title() { return `${Words.count(this.items().length, 'takeaway', true)} [[from the data]]`; }
+    get howToRead() { return this.ctx.market ? `Each point is calculated from the figures in this report. Shares are of all ${Fmt.int(this.ctx.market.total)} reviews in scope unless a language or sentiment is named.` : 'Each point is calculated from the figures in this report.'; }
+    items() { return this._items || (this._items = Findings.build(this.ctx)); }
+    isAvailable() { return this.items().length >= 2; }
+    renderBody() { return Ui.cards(this.items()); }
+}
+// ------------------------------------------------------------
+// 6. Where reviews come from: region donut + ranked list.
+//    Reads only the Step 3 all-review table (needs a Region column).
+// ------------------------------------------------------------
+class RegionSection extends Section {
+    get eyebrow() { return 'Where reviews come from'; }
+    get title() { return 'Reviews by [[region]]'; }
+    get howToRead() {
+        const m = this.ctx.market;
+        const shown = Math.min(Config.regionSlices, m.regions.length);
+        return `All ${Fmt.int(m.total)} reviews in scope, grouped into ${Words.count(m.regions.length, 'region')}. The chart shows the ${Words.NUMBERS[shown] || shown} largest${m.regions.length > shown ? ' and folds the rest into Other' : ''}; the list gives every region.`;
+    }
+    isAvailable() { return !!(this.ctx.market && this.ctx.market.hasRegions); }
+    renderBody() {
+        const m = this.ctx.market;
+        const N = Config.regionSlices;
+        const cls = i => (i < N ? `s${i + 1}` : 's-other');
+        const main = m.regions.slice(0, N), rest = m.regions.slice(N);
+        const slices = main.map((r, i) => ({ name: r.name, value: r.count, cls: cls(i) }));
+        if (rest.length)
+            slices.push({ name: `Other (${Words.list(rest.map(r => r.name))})`, value: rest.reduce((s, r) => s + r.count, 0), cls: 's-other' });
+        const supportedShare = m.hasSupport ? m.share(m.supported.reduce((s, l) => s + l.count, 0)) : null;
+        const kpis = Ui.kpis([
+            { value: Fmt.int(m.total), label: 'All reviews' },
+            { value: Fmt.int(m.activeLangs.length), label: 'Review languages' },
+            { value: Fmt.int(m.regions.length), label: 'Regions' },
+            supportedShare !== null ? { value: Fmt.pct(supportedShare), label: 'In supported languages' } : null,
+        ]);
+        const rows = m.regions.map((r, i) => `
+        <div class="region-row ${cls(i)}" title="${esc(r.name)}: ${Fmt.int(r.count)} reviews">
+          <i class="sw"></i>
+          <span class="nm">${esc(r.name)}<small>${Words.count(r.activeLanguages, 'language')} with reviews</small></span>
+          <span class="ct">${Fmt.int(r.count)}</span>
+          <span class="sh">${Fmt.share(r.share)}</span>
+        </div>`).join('');
+        const list = `<div class="region-list"><div class="region-head"><span></span><span>Region</span><span>Reviews</span><span>Share</span></div>${rows}</div>`;
+        const chart = Ui.donut(slices, { total: m.total, label: 'Reviews', title: 'Reviews by region' });
+        return kpis + Ui.block(Ui.blockHead('Share of all reviews, by region') + `<div class="region-chart">${chart}${list}</div>`);
+    }
+}
+// ------------------------------------------------------------
+// 7. Aggregate distribution: every review by language.
+//    Independent of the workbook; it reads only the Step 3 table.
 // ------------------------------------------------------------
 class LanguageDistributionSection extends Section {
     static OTHER = /^(other|others|unknown|unspecified)(\s+languages?)?$/i;
-    get eyebrow() { return 'Across languages'; }
-    get title() { return 'The full [[review landscape]]'; }
+    get eyebrow() { return 'Aggregate distribution'; }
+    get title() { return `All ${Fmt.int(this.ctx.market.total)} reviews, [[by language]]`; }
+    get howToRead() {
+        const m = this.ctx.market;
+        return `Every review language, largest first. Bars are scaled to ${m.langs[0].language}.${m.hasSupport ? ' The Localized column shows whether the game supports the language.' : ''}`;
+    }
     isAvailable() { return !!this.ctx.market; }
     /** Largest first, labels exactly as typed; an "Other" bucket always sits last. */
     rows() {
@@ -1052,34 +1533,126 @@ class LanguageDistributionSection extends Section {
         return [...langs.filter(l => !isOther(l)), ...langs.filter(isOther)];
     }
     renderBody() {
+        const m = this.ctx.market;
         const rows = this.rows();
         const max = Math.max(...rows.map(l => l.count), 1); // the biggest language fills its whole track
+        const loc = l => (l.supported === true ? '<span class="loc-yes">Yes</span>' : l.supported === false ? '<span class="loc-no">No</span>' : '');
         const body = rows.map(l => `
-      <tr>
+      <tr class="${l.count ? '' : 'empty'}">
         <td class="lang-name">${esc(l.language)}</td>
+        ${m.hasSupport ? `<td>${loc(l)}</td>` : ''}
         <td class="dist"><div class="dist-track"><i class="dist-fill" style="width:${(l.count / max * 100).toFixed(3)}%${l.count > 0 ? '' : ';min-width:0'}"></i></div></td>
         <td class="num reviews">${Fmt.int(l.count)}</td>
         <td class="num share">${Fmt.share(l.share)}</td>
       </tr>`).join('');
-        const head = Ui.th('Language') + Ui.th('Distribution') + Ui.th('Reviews', { num: true }) + Ui.th('Share', { num: true });
+        const th = (label, cls, num = false) => `<th class="${cls}${num ? ' num' : ''}">${esc(label)}</th>`;
+        const head = th('Language', 'c-lang') + (m.hasSupport ? th('Localized', 'c-loc') : '') + th('Distribution', 'c-dist') + th('Reviews', 'c-rev', true) + th('Share', 'c-share', true);
+        const notes = [
+            this.ctx.marketScope ? `Scope: ${this.ctx.marketScope}.` : '',
+            m.meta.source ? `Source: ${m.meta.source}.` : '',
+            ...m.reconciliation(),
+        ];
         return [
             Ui.block(Ui.table(head, body, 'distribution'), { splittable: true }),
-            Ui.note(this.ctx.marketScope ? `Language table scope: ${this.ctx.marketScope}` : ''),
+            notes.filter(Boolean).map(Ui.note).join(''),
         ].join('');
+    }
+}
+// ------------------------------------------------------------
+// 8. Coverage tiers: cumulative reach, largest languages first.
+// ------------------------------------------------------------
+class CoverageSection extends Section {
+    get eyebrow() { return 'Coverage'; }
+    get title() { return 'How far each [[language tier]] reaches'; }
+    get howToRead() {
+        const t = Config.coverage.map(d => `${d.upTo}%`);
+        return `Languages are added largest first until the running total passes ${Words.list(t)} of all reviews.${this.ctx.market.hasSupport ? ' Languages the game does not yet support are marked.' : ''}`;
+    }
+    data() { return this._data || (this._data = this.ctx.market.tiers()); }
+    isAvailable() { return !!this.ctx.market && this.data().tiers.length >= 2; }
+    renderBody() {
+        const m = this.ctx.market;
+        const { tiers, rest, restShare } = this.data();
+        const cards = tiers.map((t, i) => {
+            const gaps = t.langs.filter(l => l.supported === false);
+            const langs = t.langs.map(l => `<li class="${l.supported === false ? 'gap' : ''}">${esc(l.language)}<small>${l.supported === false ? 'Not supported' : Fmt.share(l.share)}</small></li>`).join('');
+            const note = [
+                `${Words.count(t.langs.length, 'language', true)}, ${Fmt.int(t.count)} reviews${i ? `, adding ${Fmt.pct(t.added)} points` : ''}.`,
+                m.hasSupport ? (gaps.length ? ` Not yet supported: ${Words.list(gaps.map(l => l.language))}.` : ' All supported.') : '',
+            ].join('');
+            return `<div class="tier${i === 0 ? ' highlight' : ''}">
+          <div class="tier-label">${esc(t.label)} · ${esc(t.name)}</div>
+          <div class="tier-reach">${Fmt.pct(t.reach)}</div>
+          <div class="tier-reach-label">Cumulative reach</div>
+          <ul class="tier-langs">${langs}</ul>
+          <p class="tier-note">${esc(note)}</p>
+        </div>`;
+        }).join('');
+        const restNote = rest.length ? `The remaining ${Words.count(rest.length, 'language')} add ${Fmt.pct(restShare)} between them.` : '';
+        return `<div class="tier-grid" style="--tiers:${tiers.length}">${cards}</div>${Ui.note(restNote)}`;
+    }
+}
+// ------------------------------------------------------------
+// 9. Method and limits
+// ------------------------------------------------------------
+class MethodSection extends Section {
+    get eyebrow() { return 'Method and limits'; }
+    get title() { return 'How to read [[these numbers]]'; }
+    get startsNewPage() { return true; }
+    isAvailable() { return this.ctx.analysis.total > 0 || !!this.ctx.market; }
+    renderBody() {
+        const { analysis, market, meta } = this.ctx;
+        const measured = [];
+        if (analysis.total)
+            measured.push(`${Fmt.int(analysis.total)} localization-related reviews from the uploaded workbook, tagged ${Words.list(this.ctx.statusDefs.map(s => s.label))}, across ${Words.count(analysis.languages.length, 'review language')}${meta.platform ? ` on ${meta.platform}` : ''}.`);
+        if (market)
+            measured.push(`A separate count of all ${Fmt.int(market.total)} reviews in ${Words.count(market.activeLangs.length, 'language')}${this.ctx.marketScope ? ` (${this.ctx.marketScope})` : ''}, used for the region and language sections.`);
+        const limits = ['Sentiment tags come from the workbook and are reported as supplied. No count was edited, sampled or re-weighted.'];
+        if (market)
+            limits.push(...market.reconciliation());
+        return Ui.cards([
+            { title: 'What was measured', body: measured },
+            { title: 'Why reviews are a proxy, not a census', body: 'Reviewers are a self-selected slice of buyers, and the habit of writing reviews differs from market to market. Read shares as a relative signal between languages, not as country sales.' },
+            { title: 'A language is not a country', body: 'The review language shows how a player chose to write, not where they live. Regions in this report group languages for readability and only approximate markets.' },
+            { title: 'What the counts do not show', body: limits },
+        ], 2);
+    }
+}
+// ------------------------------------------------------------
+// 10. Closing call to action (Config.brand.contact*)
+// ------------------------------------------------------------
+class ContactSection extends Section {
+    isAvailable() { return !!Config.brand.contactEmail; }
+    renderBody() {
+        const b = Config.brand;
+        return `<div class="cta">
+        <div class="eyebrow">${esc(b.contactEyebrow)}</div>
+        <h3>${esc(b.contactHeadline)}</h3>
+        <p>${esc(b.contactText)}</p>
+        <div class="cta-row">
+          <a class="cta-pill" href="mailto:${esc(b.contactEmail)}">${esc(b.contactEyebrow)} · ${esc(b.contactEmail)}</a>
+          <span class="cta-mark">Allcorrect</span>
+        </div>
+      </div>`;
     }
 }
 // ============================================================
 // SECTION ORDER. One line per section: delete a line to drop it,
 // move a line to reorder. Sections hide themselves when their
-// data is missing.
+// data is missing; numbers (01, 02...) follow the visible order.
 // ============================================================
 const SECTION_REGISTRY = [
     VoiceSentimentSection,
+    KeyFindingsSection,
     ProductSection,
     TimelineSection,
     QuotesSection,
     BreakdownSection,
+    RegionSection,
     LanguageDistributionSection,
+    CoverageSection,
+    MethodSection,
+    ContactSection,
 ];
 /* ===== document.js ===== */
 /* ============================================================
@@ -1093,7 +1666,7 @@ class CoverPage {
         this.meta = meta;
         this.analysis = analysis;
     }
-    get eyebrow() { return 'Player sentiment analysis'; }
+    get eyebrow() { return ['Player sentiment analysis', this.meta.platform].filter(Boolean).join(' · '); }
     get lede() {
         const fetched = Text.leadingNumber(this.meta.fetched);
         const analysed = Text.leadingNumber(this.meta.analysed);
@@ -1164,10 +1737,15 @@ class ReportBody {
     }
     render() {
         const node = Html.el('div', 'doc-flow');
+        let number = 0;
         this.sectionClasses
-            .map(SectionClass => new SectionClass(this.ctx).render())
-            .filter(Boolean)
-            .forEach(section => node.appendChild(section));
+            .map(SectionClass => new SectionClass(this.ctx))
+            .filter(section => section.isAvailable())
+            .forEach(section => {
+                if (section.eyebrow)
+                    section.number = ++number;
+                node.appendChild(section.render());
+            });
         return node;
     }
 }
@@ -1270,6 +1848,15 @@ class PrintController {
     static MODES = { report: 'print-report-only', 'report-reviews': 'print-report-with-reviews' };
     constructor(body = document.body) { this.body = body; }
     static cssString(s) { return String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' '); }
+    /** Running footer for printed pages: title, site, page number. */
+    static footerCss(title) {
+        const box = 'font-family:"Inter",Arial,sans-serif;font-size:9px;color:#8c8c8c;';
+        return `@page{
+      @bottom-left{content:"${PrintController.cssString(title)}";${box}}
+      @bottom-center{content:"${PrintController.cssString(Config.brand.site)}";${box}}
+      @bottom-right{content:counter(page);${box}}
+    }`;
+    }
     writeFooterStyle(title) {
         let style = document.getElementById('print-footer-style');
         if (!style) {
@@ -1277,12 +1864,7 @@ class PrintController {
             style.id = 'print-footer-style';
             document.head.appendChild(style);
         }
-        const box = 'font-family:"Anthropic Sans","Anthropic Sans Web","Inter",Arial,sans-serif;font-size:9px;color:#6d7594;';
-        style.textContent = `@page{
-      @bottom-left{content:"${PrintController.cssString(title)}";${box}}
-      @bottom-center{content:"${PrintController.cssString(Config.brand.site)}";${box}}
-      @bottom-right{content:counter(page);${box}}
-    }`;
+        style.textContent = PrintController.footerCss(title);
     }
     async print(mode, title) {
         Object.values(PrintController.MODES).forEach(cls => this.body.classList.remove(cls));
@@ -1306,6 +1888,94 @@ class PrintController {
         }));
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         window.print();
+    }
+}
+/**
+ * "Save HTML": one self-contained .html file of the generated report.
+ * Styles are inlined and images become data URIs, so the file opens offline,
+ * can be emailed, and still prints to PDF with the same layout and footer.
+ */
+class HtmlExporter {
+    static FONTS = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap';
+    static async css() {
+        try {
+            const res = await fetch('styles.css', { cache: 'no-cache' });
+            if (res.ok)
+                return await res.text();
+        }
+        catch (_) { }
+        try { // file:// pages cannot fetch; read the loaded stylesheet instead
+            return [...document.styleSheets]
+                .filter(s => !s.href || /styles\.css/.test(s.href))
+                .map(s => [...s.cssRules].map(r => r.cssText).join('\n'))
+                .join('\n');
+        }
+        catch (_) {
+            return '';
+        }
+    }
+    static async dataUrl(src) {
+        if (!src || src.startsWith('data:'))
+            return src;
+        try {
+            const res = await fetch(src);
+            if (!res.ok)
+                throw new Error(String(res.status));
+            const blob = await res.blob();
+            return await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+        catch (_) {
+            return new URL(src, location.href).href; // keep a working link if inlining fails
+        }
+    }
+    static fileName(title) {
+        const slug = String(title || 'report').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
+        return `${slug || 'report'}-sentiment-report.html`;
+    }
+    static async build(reportEl, { title, includeReviews }) {
+        const clone = reportEl.cloneNode(true);
+        if (!includeReviews)
+            clone.querySelectorAll('.doc-reviews').forEach(n => n.remove());
+        await Promise.all([...clone.querySelectorAll('img')].map(async (img) => {
+            img.setAttribute('src', await HtmlExporter.dataUrl(img.getAttribute('src')));
+        }));
+        const css = await HtmlExporter.css();
+        const styles = css ? `<style>\n${css}\n</style>` : `<link rel="stylesheet" href="${esc(new URL('styles.css', location.href).href)}">`;
+        return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="generator" content="Allcorrect Sentiment Report Generator">
+<title>${esc(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="${HtmlExporter.FONTS}" rel="stylesheet">
+${styles}
+<style>${PrintController.footerCss(title)}</style>
+</head>
+<body class="exported">
+<div class="app-shell">
+<div id="report">${clone.innerHTML}</div>
+</div>
+</body>
+</html>
+`;
+    }
+    static async download(reportEl, options) {
+        const html = await HtmlExporter.build(reportEl, options);
+        const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+        const a = Object.assign(document.createElement('a'), { href: url, download: HtmlExporter.fileName(options.title) });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        return { bytes: html.length, name: a.download };
     }
 }
 /* ===== app.js ===== */
@@ -1338,6 +2008,28 @@ class ReportForm {
             ['input', 'change'].forEach(evt => input.addEventListener(evt, () => input.classList.remove('field-error')));
         });
         f.periodTo.value = Dates.todayISO();
+        this.marketNote = document.getElementById('marketNote');
+        f.marketTable.addEventListener('input', () => this.describeMarket());
+    }
+    /** Live feedback under the Step 03 box: what the parser understood. */
+    describeMarket() {
+        if (!this.marketNote)
+            return;
+        const text = this.fields.marketTable.value;
+        const table = MarketTable.from(MarketTable.parse(text));
+        if (!text.trim()) {
+            this.marketNote.textContent = '';
+            this.marketNote.className = 'field-note';
+        }
+        else if (!table) {
+            this.marketNote.textContent = 'No language rows with review counts found yet. Include a header row (Language, Reviews) or lines such as English, 1724.';
+            this.marketNote.className = 'field-note warn';
+        }
+        else {
+            const issues = table.reconciliation();
+            this.marketNote.textContent = table.describe() + (issues.length ? ' ' + issues.join(' ') : '');
+            this.marketNote.className = 'field-note ' + (issues.length ? 'warn' : 'ok');
+        }
     }
     /** Auto-fill from workbook metadata. "To" always starts as today. */
     fill(meta) {
@@ -1374,9 +2066,10 @@ class ReportForm {
     }
     values() {
         const f = this.fields;
+        const market = MarketTable.parse(f.marketTable.value);
         return {
             meta: {
-                gameTitle: f.gameTitle.value || 'Untitled Project',
+                gameTitle: f.gameTitle.value || market.meta.game || 'Untitled Project',
                 publisher: f.publisher.value.trim(),
                 platform: f.platform.value || '',
                 preparedFor: f.preparedFor.value || '',
@@ -1387,7 +2080,7 @@ class ReportForm {
                 analysed: f.analysed.value || '',
             },
             product: f.productFilter.value,
-            marketRows: MarketTable.parseText(f.marketTable.value),
+            market,
             marketScope: f.marketScope.value.trim(),
         };
     }
@@ -1403,6 +2096,7 @@ class App {
         this.fileInput = $('fileInput');
         this.generateBtn = $('generateBtn');
         this.downloadBtn = $('downloadBtn');
+        this.saveHtmlBtn = $('saveHtmlBtn');
         this.reportEl = $('report');
         this.printMode = $('printMode');
         this.status = new StatusLine($('statusLine'));
@@ -1423,6 +2117,7 @@ class App {
             this.loadFile(f); });
         this.generateBtn.addEventListener('click', () => this.generate());
         this.downloadBtn.addEventListener('click', () => this.print());
+        this.saveHtmlBtn.addEventListener('click', () => this.saveHtml());
     }
     loadFile(file) {
         this.fileName = file.name;
@@ -1449,7 +2144,7 @@ class App {
         this.form.populateProducts(dataset.metadata.products || []);
         const label = this.dropzone.querySelector('.filename') || Html.el('div', 'filename');
         const source = dataset.reviews.length ? `${Fmt.int(dataset.reviews.length)} review rows` : `${Fmt.int(dataset.aggregateRows.length)} aggregate rows`;
-        label.textContent = `✓ ${fileName} — ${source} loaded`;
+        label.textContent = `Loaded ${fileName}: ${source}`;
         if (!this.dropzone.contains(label))
             this.dropzone.appendChild(label);
         const reviewsOption = this.printMode.querySelector('option[value="report-reviews"]');
@@ -1497,7 +2192,7 @@ class App {
         const ctx = new ReportContext({
             analysis, reviews,
             meta: input.meta,
-            marketRows: input.marketRows,
+            market: input.market,
             marketScope: input.marketScope,
             filtered: !!input.product,
         });
@@ -1505,12 +2200,34 @@ class App {
         const warnings = ctx.warnings();
         this.status.set(warnings.length ? warnings.join(' ') : 'Report generated.', warnings.length ? 'warn' : 'ok');
         this.downloadBtn.disabled = false;
+        this.saveHtmlBtn.disabled = false;
+        this.title = input.meta.gameTitle;
         this.reportEl.scrollIntoView({ behavior: 'smooth' });
     }
     print() {
         if (!this.dataset || !this.reportEl.children.length)
             return this.status.set('Generate the report before printing.', 'error');
-        this.printer.print(this.printMode.value, this.form.fields.gameTitle.value || 'Sentiment Report');
+        this.printer.print(this.printMode.value, this.title || 'Sentiment Report');
+    }
+    async saveHtml() {
+        if (!this.dataset || !this.reportEl.children.length)
+            return this.status.set('Generate the report before saving it.', 'error');
+        const btn = this.saveHtmlBtn;
+        btn.disabled = true;
+        try {
+            const { name, bytes } = await HtmlExporter.download(this.reportEl, {
+                title: this.title || 'Sentiment Report',
+                includeReviews: this.printMode.value === 'report-reviews',
+            });
+            this.status.set(`Saved ${name} (${(bytes / 1048576).toFixed(1)} MB). It opens in any browser, works offline and can be printed to PDF.`, 'ok');
+        }
+        catch (err) {
+            console.error(err);
+            this.status.set('Could not save the HTML file: ' + err.message, 'error');
+        }
+        finally {
+            btn.disabled = false;
+        }
     }
 }
 if (typeof document !== 'undefined') {
