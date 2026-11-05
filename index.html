@@ -113,6 +113,22 @@
       </div>
     </div>
 
+    <div class="panel-divider"></div>
+    <div class="panel-head details-head">
+      <div>
+        <div class="step-label">Step 04 (optional)</div>
+        <h2>Steam prices for the money lens</h2>
+      </div>
+      <p class="hint">Weights each language's review share by the game's own Steam price in its main market. Get the table by running <a href="tools/steam_prices.py" download>tools/steam_prices.py</a> with the game's Steam app ID (python3 steam_prices.py 1374490) and paste its whole output here. It reads the live store prices and converts them with ECB and US Treasury exchange rates; the store page, fetch date and rate sources are printed under the charts. Needs the Step 03 table too.</p>
+    </div>
+    <div class="field-grid">
+      <div class="field span2">
+        <label for="f-priceTable">Steam prices</label>
+        <textarea id="f-priceTable" rows="8" spellcheck="false" placeholder="Game&#9;RuneScape: Dragonwilds&#10;Store page&#9;https://store.steampowered.com/app/1374490/&#10;...&#10;Market&#9;Code&#9;Currency&#9;Price&#9;USD&#9;Rate source&#10;United States&#9;US&#9;USD&#9;29.99&#9;29.99&#9;-"></textarea>
+        <div class="field-note" id="priceNote" aria-live="polite"></div>
+      </div>
+    </div>
+
     <div class="panel-actions">
       <button id="generateBtn" class="primary" disabled>Generate report</button>
       <span class="action-note">The on-screen report always includes the full reviews section when review rows exist. Use "Content" above to choose whether the PDF or saved HTML includes the source reviews.</span>

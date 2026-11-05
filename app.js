@@ -62,6 +62,47 @@ const Config = Object.freeze({
     knownPublishers: Object.freeze({
         '1374490': 'Jagex', // RuneScape: Dragonwilds
     }),
+    // Money lens: which Steam store market prices each review language.
+    // First match wins, so the more specific patterns come first. Codes must match
+    // the "Code" column printed by tools/steam_prices.py.
+    priceMarkets: Object.freeze([
+        { test: /^(?=.*spanish)(?=.*(latin|latam|lat\.|mexic))/i, code: 'MX' },
+        { test: /^(?=.*portuguese)(?=.*(brazil|\bbr\b))/i, code: 'BR' },
+        { test: /^(?=.*chinese)(?=.*(trad|taiwan|hong))/i, code: 'TW' },
+        { test: /english/i, code: 'US' },
+        { test: /german/i, code: 'DE' },
+        { test: /french/i, code: 'FR' },
+        { test: /italian/i, code: 'IT' },
+        { test: /spanish/i, code: 'ES' },
+        { test: /portuguese/i, code: 'PT' },
+        { test: /chinese/i, code: 'CN' },
+        { test: /russian/i, code: 'RU' },
+        { test: /ukrainian/i, code: 'UA' },
+        { test: /korean/i, code: 'KR' },
+        { test: /japanese/i, code: 'JP' },
+        { test: /polish/i, code: 'PL' },
+        { test: /czech/i, code: 'CZ' },
+        { test: /hungarian/i, code: 'HU' },
+        { test: /romanian/i, code: 'RO' },
+        { test: /bulgarian/i, code: 'BG' },
+        { test: /turkish/i, code: 'TR' },
+        { test: /arabic/i, code: 'SA' },
+        { test: /dutch/i, code: 'NL' },
+        { test: /greek/i, code: 'GR' },
+        { test: /swedish/i, code: 'SE' },
+        { test: /danish/i, code: 'DK' },
+        { test: /norwegian/i, code: 'NO' },
+        { test: /finnish/i, code: 'FI' },
+        { test: /thai/i, code: 'TH' },
+        { test: /vietnamese/i, code: 'VN' },
+        { test: /indonesian/i, code: 'ID' },
+    ]),
+    // Valve's own documentation on how regional pricing works, printed under the money lens.
+    steamPricingDocs: Object.freeze([
+        { label: 'Steamworks Documentation, Pricing', url: 'https://partner.steamgames.com/doc/store/pricing' },
+        { label: 'Steamworks Documentation, Supported Currencies', url: 'https://partner.steamgames.com/doc/store/pricing/currencies' },
+    ]),
+    moneyLensRows: 12,
     statusOrder: ['negative', 'request', 'positive'],
     statusLabels: { negative: 'Negative', request: 'Request', positive: 'Positive' },
     statusSynonyms: {
@@ -610,9 +651,113 @@ class MarketTable {
         return out;
     }
 }
+/**
+ * Steam store prices per market, pasted in Step 04 (output of tools/steam_prices.py,
+ * or any table with Code and USD columns). Feeds the money lens.
+ */
+class PriceTable {
+    static HEAD = {
+        code: ['code', 'country code', 'cc', 'market code'],
+        market: ['market', 'country', 'region'],
+        currency: ['currency', 'cur'],
+        price: ['price', 'local price', 'steam price'],
+        usd: ['usd', 'usd price', 'price usd', 'price (usd)', 'usd equivalent'],
+        source: ['rate source', 'source'],
+    };
+    static META = {
+        'game': 'game', 'app id': 'appId', 'appid': 'appId', 'store page': 'storePage', 'store': 'storePage',
+        'prices fetched': 'fetched', 'fetched': 'fetched', 'exchange rates': 'rates', 'rates': 'rates',
+    };
+    constructor(parsed) {
+        this.meta = parsed.meta;
+        this.rows = parsed.rows;
+        this.byCode = {};
+        this.rows.forEach(r => { if (!this.byCode[r.code]) this.byCode[r.code] = r; });
+    }
+    static from(parsed) {
+        if (!parsed || !parsed.rows.length)
+            return null;
+        const t = new PriceTable(parsed);
+        return t.byCode.US && t.byCode.US.usd > 0 ? t : null;
+    }
+    static marketFor(language) {
+        const hit = Config.priceMarkets.find(m => m.test.test(String(language || '')));
+        return hit ? hit.code : '';
+    }
+    static parse(text) {
+        const out = { rows: [], meta: {} };
+        let cols = null, sep = null;
+        const num = v => {
+            const s = String(v ?? '').replace(/[^\d.,-]/g, '');
+            const n = parseFloat(/,\d{1,2}$/.test(s) ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, ''));
+            return Number.isFinite(n) ? n : NaN;
+        };
+        String(text || '').split(/\r?\n/).forEach(raw => {
+            const line = raw.replace(/ /g, ' ');
+            if (!line.trim())
+                return;
+            const lineSep = MarketTable.splitter(line);
+            const cells = MarketTable.split(line, lineSep);
+            const n = cells.map(c => Text.normalize(c));
+            const H = PriceTable.HEAD;
+            const code = MarketTable.findCol(n, H.code), usd = MarketTable.findCol(n, H.usd);
+            if (code >= 0 && usd >= 0) {
+                cols = { code, usd, market: MarketTable.findCol(n, H.market), currency: MarketTable.findCol(n, H.currency), price: n.findIndex(c => H.price.includes(c)), source: MarketTable.findCol(n, H.source) };
+                sep = lineSep;
+                return;
+            }
+            if (cols && lineSep === sep && cells.length > 2) {
+                const at = i => (i >= 0 ? cells[i] ?? '' : '');
+                const c = at(cols.code).toUpperCase();
+                if (/^[A-Z]{2}$/.test(c))
+                    out.rows.push({ code: c, market: at(cols.market) || c, currency: at(cols.currency), price: num(at(cols.price)), usd: num(at(cols.usd)), source: at(cols.source) });
+                return;
+            }
+            if (cells.length === 2) {
+                const key = PriceTable.META[Text.normalize(cells[0]).replace(/:$/, '')];
+                if (key && !out.meta[key])
+                    out.meta[key] = cells[1];
+            }
+        });
+        return out;
+    }
+    /** Review share x (local price in USD / US price), rescaled to 100% across priced languages. */
+    lens(market) {
+        const us = this.byCode.US.usd;
+        const rows = market.activeLangs.map(l => {
+            const code = PriceTable.marketFor(l.language);
+            const p = code ? this.byCode[code] : null;
+            return { lang: l, code, price: p && p.usd > 0 ? p : null };
+        });
+        const priced = rows.filter(r => r.price).map(r => ({ ...r, ratio: r.price.usd / us, raw: r.lang.share * r.price.usd / us }));
+        const rawSum = priced.reduce((s, r) => s + r.raw, 0) || 1;
+        const shareSum = priced.reduce((s, r) => s + r.lang.share, 0) || 1;
+        priced.forEach(r => {
+            r.weight = r.raw / rawSum * 100;
+            r.reviewShare = r.lang.share / shareSum * 100;
+        });
+        return {
+            priced: priced.sort((a, b) => b.reviewShare - a.reviewShare),
+            unpriced: rows.filter(r => !r.price),
+            coverage: priced.reduce((s, r) => s + r.lang.share, 0),
+            us: this.byCode.US,
+        };
+    }
+    describe() {
+        const bits = [`${Words.count(this.rows.length, 'market')}`, `US price ${this.byCode.US.price || this.byCode.US.usd} ${this.byCode.US.currency || 'USD'}`];
+        if (this.meta.game)
+            bits.push(this.meta.game);
+        if (this.meta.fetched)
+            bits.push(`fetched ${this.meta.fetched.split(',')[0]}`);
+        if (!this.meta.rates)
+            bits.push('no exchange-rate source line, so the report cannot cite one');
+        return 'Read ' + bits.join('; ') + '.';
+    }
+}
 /** Everything a section needs, in one object. */
 class ReportContext {
-    constructor({ analysis, meta, reviews, market = null, marketScope = '', filtered = false }) {
+    constructor({ analysis, meta, reviews, market = null, marketScope = '', prices = null, filtered = false }) {
+        this.prices = PriceTable.from(prices);
         this.analysis = analysis;
         this.statusDefs = analysis.statusDefs;
         this.meta = meta;
@@ -962,6 +1107,16 @@ class Ui {
         return `<div class="block-head"><div class="block-label">${esc(label)}</div>${kicker ? `<div class="block-kicker">${esc(kicker)}</div>` : ''}</div>`;
     }
     static note(text) { return text ? `<div class="scope-note">${esc(text)}</div>` : ''; }
+    /** Like note(), but http(s) links become clickable so readers can open the source. */
+    static sourceNote(text) {
+        if (!text)
+            return '';
+        const html = esc(text).replace(/https?:\/\/[^\s)<;]+/g, url => {
+            const clean = url.replace(/[.,]+$/, '');
+            return `<a href="${clean}" target="_blank" rel="noopener noreferrer">${clean}</a>${url.slice(clean.length)}`;
+        });
+        return `<div class="scope-note">${html}</div>`;
+    }
     /** Title text with keywords in [[double brackets]] coloured blue. */
     static title(text) {
         return esc(text).replace(/\[\[(.+?)\]\]/g, '<span class="hl">$1</span>');
@@ -1606,7 +1761,126 @@ class CoverageSection extends Section {
     }
 }
 // ------------------------------------------------------------
-// 9. Method and limits
+// 9. The money lens: review share weighted by the game's own
+//    Steam price in each language's main market (Step 03 + Step 04).
+// ------------------------------------------------------------
+class MoneyLensSection extends Section {
+    get eyebrow() { return 'The money lens'; }
+    get title() { return 'Review volume is not [[revenue]]'; }
+    get howToRead() {
+        return "Each language's share of reviews is multiplied by the game's own Steam price in that language's main market, compared with the US price, then rescaled to 100% across the priced languages. It shows where the spend sits, not only where the players are.";
+    }
+    get startsNewPage() { return true; }
+    isAvailable() { return !!(this.ctx.market && this.ctx.prices && this.data().priced.length >= 2); }
+    data() { return this._data || (this._data = this.ctx.prices.lens(this.ctx.market)); }
+    static money(row) {
+        if (!row)
+            return '';
+        const p = Number.isFinite(row.price) ? row.price : row.usd;
+        const cur = row.currency || 'USD';
+        const digits = p >= 1000 || Number.isInteger(p) ? 0 : 2;
+        return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: 2 }).format(p)} ${cur}`;
+    }
+    cards() {
+        const { priced } = this.data();
+        const top = priced.filter(r => r.reviewShare >= 1).slice(0, 8);
+        const out = [];
+        const byWeight = [...priced].sort((a, b) => b.weight - a.weight);
+        const i = priced.findIndex((r, k) => byWeight[k] && byWeight[k] !== r);
+        if (i >= 0 && i < 6) {
+            const up = byWeight[i], down = priced[i];
+            out.push({
+                title: `${up.lang.language} moves ahead of ${down.lang.language}`,
+                body: `By review volume ${down.lang.language} ranks ${Words.ordinal(i + 1)}. Weighted by price, ${up.lang.language} takes that place: ${Fmt.pct(up.weight)} of revenue weight against ${Fmt.pct(down.weight)}.`,
+            });
+        }
+        if (top.length >= 2) {
+            const hi = top.reduce((a, b) => (b.ratio > a.ratio ? b : a));
+            const lo = top.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+            if (hi !== lo && hi.ratio / lo.ratio >= 1.15)
+                out.push({
+                    title: `A ${hi.lang.language} review carries ${(hi.ratio / lo.ratio).toFixed(1)}x the weight of a ${lo.lang.language} one`,
+                    body: `The game costs ${MoneyLensSection.money(hi.price)} in ${hi.price.market} (${Fmt.pct(hi.ratio * 100)} of the US price) and ${MoneyLensSection.money(lo.price)} in ${lo.price.market} (${Fmt.pct(lo.ratio * 100)}).`,
+                });
+        }
+        const drop = top.filter(r => r.weight < r.reviewShare).sort((a, b) => (b.reviewShare - b.weight) - (a.reviewShare - a.weight))[0];
+        if (drop)
+            out.push({
+                title: `${drop.lang.language} drops from ${Fmt.pct(drop.reviewShare)} to ${Fmt.pct(drop.weight)}`,
+                body: `At ${Fmt.pct(drop.ratio * 100)} of the US price, ${drop.lang.language} earns its place on reach and engagement more than on margin.`,
+            });
+        const gain = top.filter(r => r.weight > r.reviewShare && r.code !== 'US').sort((a, b) => (b.weight - b.reviewShare) - (a.weight - a.reviewShare))[0];
+        if (gain && out.length < 3)
+            out.push({
+                title: `${gain.lang.language} rises from ${Fmt.pct(gain.reviewShare)} to ${Fmt.pct(gain.weight)}`,
+                body: `The game costs ${MoneyLensSection.money(gain.price)} in ${gain.price.market}, ${Fmt.pct(gain.ratio * 100)} of the US price, so each review there stands for more spend.`,
+            });
+        return out.slice(0, 3);
+    }
+    chart(rows) {
+        const max = Math.max(...rows.map(r => Math.max(r.reviewShare, r.weight)), 1);
+        const body = rows.map(r => `
+        <div class="ml-row" title="${esc(r.lang.language)}: ${Fmt.pct(r.reviewShare)} of reviews, ${Fmt.pct(r.weight)} of revenue weight">
+          <div class="ml-name">${esc(r.lang.language)}</div>
+          <div class="ml-bars">
+            <div class="ml-track"><i class="ml-fill reviews" style="width:${(r.reviewShare / max * 100).toFixed(2)}%"></i></div>
+            <div class="ml-track"><i class="ml-fill weight" style="width:${(r.weight / max * 100).toFixed(2)}%"></i></div>
+          </div>
+          <div class="ml-vals"><span>${Fmt.pct(r.reviewShare)}</span><b>${Fmt.pct(r.weight)}</b></div>
+        </div>`).join('');
+        return `<div class="legend"><span><i class="dot ml-key reviews"></i>Share of reviews</span><span><i class="dot ml-key weight"></i>Revenue weight</span></div><div class="ml-rows">${body}</div>`;
+    }
+    table(rows) {
+        const body = rows.map(r => `
+      <tr>
+        <td class="lang-name">${esc(r.lang.language)}</td>
+        <td>${esc(r.price.market)}</td>
+        <td class="num">${esc(MoneyLensSection.money(r.price))}</td>
+        <td class="num">${Fmt.pct(r.ratio * 100)}</td>
+        <td class="num">${Fmt.share(r.reviewShare)}</td>
+        <td class="num share">${Fmt.share(r.weight)}</td>
+      </tr>`).join('');
+        const th = (l, cls, num = false) => `<th class="${cls}${num ? ' num' : ''}">${esc(l)}</th>`;
+        const head = th('Language', 'c-lang') + th('Steam market', 'c-mkt') + th('Steam price', 'c-price', true) + th('Vs US', 'c-vs', true) + th('Reviews', 'c-rev', true) + th('Weighted', 'c-w', true);
+        return Ui.table(head, body, 'money');
+    }
+    sources() {
+        const { meta } = this.ctx.prices;
+        const store = [meta.game, meta.storePage].filter(Boolean).join(', ');
+        return [
+            `Prices: Steam store${store ? `, ${store}` : ''}${meta.fetched ? `. Fetched ${meta.fetched}` : ''}.`,
+            meta.rates ? `Exchange rates: ${meta.rates}.` : 'Exchange rates: not stated in the pasted price table.',
+            `How Steam regional pricing works: ${Config.steamPricingDocs.map(d => `${d.label} (${d.url})`).join('; ')}.`,
+        ].map(Ui.sourceNote).join('');
+    }
+    methodNotes() {
+        const { priced, unpriced, coverage } = this.data();
+        const by = this.ctx.prices.byCode;
+        const mapping = priced.map(r => `${r.lang.language} = ${r.price.market}`).join(', ');
+        const eng = priced.find(r => r.code === 'US');
+        const others = ['GB', 'CA', 'AU'].map(c => by[c]).filter(p => p && p.usd > 0);
+        const notes = [
+            `Weighted = review share x (Steam price in USD / US price), rescaled to 100% across the ${priced.length} priced languages, which hold ${Fmt.pct(coverage)} of all reviews. Review shares in this section are rescaled the same way so the two columns compare directly.`,
+            `Each language is priced in one main market: ${mapping}. A language is not a country, so treat this as an estimate.`,
+            eng && others.length ? `English uses the US price. English reviews also come from other markets, such as ${Words.list(others.map((p, k) => `${p.market === 'United Kingdom' ? 'the United Kingdom' : p.market} (${Fmt.pct(p.usd / by.US.usd * 100)}${k === 0 ? ' of the US price' : ''})`))}.` : '',
+            unpriced.length ? `Not priced: ${Words.list(unpriced.map(r => r.lang.language))}${unpriced.some(r => r.code) ? ' (no price for their market in the pasted table)' : ''}.` : '',
+            'Use your own sales or ARPU data wherever you have it; it beats any price-based estimate.',
+        ];
+        return notes.filter(Boolean).map(Ui.note).join('');
+    }
+    renderBody() {
+        const rows = this.data().priced.slice(0, Config.moneyLensRows);
+        return [
+            Ui.block(Ui.blockHead('Share of reviews vs revenue weight, largest languages') + this.chart(rows)),
+            this.sources(),
+            Ui.block(this.table(this.data().priced), { splittable: true }),
+            this.methodNotes(),
+            Ui.cards(this.cards(), 3),
+        ].join('');
+    }
+}
+// ------------------------------------------------------------
+// 10. Method and limits
 // ------------------------------------------------------------
 class MethodSection extends Section {
     get eyebrow() { return 'Method and limits'; }
@@ -1664,6 +1938,7 @@ const SECTION_REGISTRY = [
     RegionSection,
     LanguageDistributionSection,
     CoverageSection,
+    MoneyLensSection,
     MethodSection,
     ContactSection,
 ];
@@ -2043,7 +2318,7 @@ class PublisherBook {
 class ReportForm {
     static FIELD_IDS = [
         'gameTitle', 'publisher', 'platform', 'productFilter',
-        'periodFrom', 'periodTo', 'fetched', 'analysed', 'marketTable', 'marketScope',
+        'periodFrom', 'periodTo', 'fetched', 'analysed', 'marketTable', 'marketScope', 'priceTable',
     ];
     constructor(doc = document) {
         this.fields = {};
@@ -2059,8 +2334,30 @@ class ReportForm {
         f.periodTo.value = Dates.todayISO();
         this.marketNote = document.getElementById('marketNote');
         f.marketTable.addEventListener('input', () => this.describeMarket());
+        this.priceNote = document.getElementById('priceNote');
+        f.priceTable.addEventListener('input', () => this.describePrices());
     }
     /** Live feedback under the Step 03 box: what the parser understood. */
+    /** Live feedback under the Step 04 box. */
+    describePrices() {
+        if (!this.priceNote)
+            return;
+        const text = this.fields.priceTable.value;
+        const table = PriceTable.from(PriceTable.parse(text));
+        if (!text.trim()) {
+            this.priceNote.textContent = '';
+            this.priceNote.className = 'field-note';
+        }
+        else if (!table) {
+            this.priceNote.textContent = 'No price rows with Code and USD columns and a US row found yet. Paste the full output of tools/steam_prices.py.';
+            this.priceNote.className = 'field-note warn';
+        }
+        else {
+            const d = table.describe();
+            this.priceNote.textContent = d + (this.fields.marketTable.value.trim() ? '' : ' The money lens also needs the Step 03 review table.');
+            this.priceNote.className = 'field-note ' + (/no exchange-rate/.test(d) ? 'warn' : 'ok');
+        }
+    }
     describeMarket() {
         if (!this.marketNote)
             return;
@@ -2126,6 +2423,7 @@ class ReportForm {
             },
             product: f.productFilter.value,
             market,
+            prices: PriceTable.parse(f.priceTable.value),
             marketScope: f.marketScope.value.trim(),
         };
     }
@@ -2248,6 +2546,7 @@ class App {
             analysis, reviews,
             meta: input.meta,
             market: input.market,
+            prices: input.prices,
             marketScope: input.marketScope,
             filtered: !!input.product,
         });

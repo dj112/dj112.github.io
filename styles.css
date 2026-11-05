@@ -938,12 +938,48 @@ input[type="file"]{ display:none; }
   text-transform:uppercase;
 }
 
+/* Money lens: paired bars (reviews vs revenue weight) + price table */
+.ml-rows{ display:flex; flex-direction:column; gap:10px; }
+.ml-row{
+  display:grid;
+  grid-template-columns:170px minmax(0,1fr) 108px;
+  align-items:center;
+  gap:var(--sp-3);
+}
+.ml-name{ font-size:var(--fs-body); font-weight:500; overflow-wrap:anywhere; }
+.ml-bars{ display:flex; flex-direction:column; gap:3px; }
+.ml-track{ height:8px; border-radius:999px; background:var(--blue-track); overflow:hidden; }
+.ml-fill{ display:block; height:100%; min-width:3px; border-radius:999px; }
+.ml-fill.reviews,.ml-key.reviews{ background:#8c8c8c; }
+.ml-fill.weight,.ml-key.weight{ background:var(--blue); }
+.ml-vals{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  font-size:13px;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.ml-vals span{ color:var(--text-dim); }
+.ml-vals b{ color:var(--blue); font-weight:700; min-width:44px; text-align:right; }
+.tbl.money{ table-layout:fixed; font-size:13.5px; }
+.tbl.money thead th{ padding:0 var(--sp-2) var(--sp-3) 0; }
+.tbl.money td{ padding:6px var(--sp-2) 6px 0; }
+.tbl.money th.c-lang{ width:24%; }
+.tbl.money th.c-mkt{ width:19%; }
+.tbl.money th.c-price{ width:18%; }
+.tbl.money td.share{ font-weight:600; color:var(--blue); }
+
 /* Notes */
 .scope-note{
   font-size:12.5px;
   line-height:1.6;
   color:var(--text-dim);
+  overflow-wrap:anywhere;
 }
+.scope-note a{ color:var(--blue); text-decoration:none; }
+.scope-note a:hover{ text-decoration:underline; }
+.panel p.hint a{ color:var(--blue); }
 .scope-note + .scope-note{ margin-top:var(--sp-1); }
 
 /* Call to action */
@@ -1343,6 +1379,8 @@ body.exported .app-shell{ padding-top:40px; }
   .quote-grid,.card-grid,.card-grid.cols-2,.tier-grid{ grid-template-columns:1fr; }
   .kpi-grid.cols-3{ grid-template-columns:repeat(2,minmax(0,1fr)); }
   .region-chart{ grid-template-columns:1fr; }
+  .ml-row{ grid-template-columns:96px minmax(0,1fr) 92px; gap:8px; }
+  .ml-name{ font-size:12.5px; }
   .region-chart .donut{ max-width:240px; margin:0 auto; }
   .cta{ padding:28px 22px; }
   .cta-row{ flex-direction:column; align-items:flex-start; }
