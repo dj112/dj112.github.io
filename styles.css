@@ -848,7 +848,7 @@ input[type="file"]{ display:none; }
 }
 .mini-sent i{ display:block; min-width:2px; background:var(--tone); }
 
-/* Findings: tag, headline, evidence, quote, next step */
+/* Findings: tag, headline, evidence, quote */
 .info-card.finding{ display:flex; flex-direction:column; }
 .f-tag{
   margin-bottom:10px;
@@ -875,23 +875,7 @@ input[type="file"]{ display:none; }
   letter-spacing:.04em;
   color:var(--text-faint);
 }
-.info-card p.f-next{
-  margin-top:auto;
-  padding-top:14px;
-  font-size:13px;
-  color:var(--text);
-}
-.info-card p.f-next b{
-  display:block;
-  margin-bottom:3px;
-  font-size:10.5px;
-  font-weight:700;
-  letter-spacing:var(--ls-label);
-  text-transform:uppercase;
-  color:var(--text-faint);
-}
-.info-card.finding p + p.f-next,.info-card.finding .f-quote + p.f-next{ margin-top:auto; }
-.info-card.finding > p:not(.f-next){ margin-bottom:0; }
+.info-card.finding > p{ margin-bottom:0; }
 
 /* Coverage tiers */
 .tier-grid{
