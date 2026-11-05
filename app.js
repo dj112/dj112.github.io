@@ -102,6 +102,8 @@ const Config = Object.freeze({
     // in this order of definition. A review is placed by the reviewer's country when the
     // workbook gives one ("Brazil", "Taiwan / HK", "CIS"), otherwise by its review language.
     marketRegions: Object.freeze([
+        // English with no known reviewer country: English is read worldwide, so it is not assumed to be North America.
+        { name: 'Global (English)', countries: [] },
         { name: 'North America', countries: ['united states', 'usa', 'us', 'america', 'canada', 'north america'] },
         { name: 'Latin America', countries: ['latin america', 'latam', 'south america', 'central america', 'mexico', 'brazil', 'argentina', 'chile', 'colombia', 'peru', 'venezuela', 'uruguay', 'paraguay', 'bolivia', 'ecuador', 'costa rica', 'panama', 'guatemala', 'honduras', 'el salvador', 'nicaragua', 'dominican republic', 'cuba', 'puerto rico'] },
         { name: 'Western Europe', countries: ['western europe', 'europe', 'eu', 'united kingdom', 'uk', 'great britain', 'britain', 'england', 'scotland', 'wales', 'ireland', 'germany', 'austria', 'switzerland', 'dach', 'france', 'belgium', 'netherlands', 'luxembourg', 'benelux', 'spain', 'portugal', 'italy', 'greece', 'malta', 'cyprus', 'sweden', 'norway', 'denmark', 'finland', 'iceland', 'nordics', 'scandinavia'] },
@@ -119,7 +121,7 @@ const Config = Object.freeze({
         { test: /^(?=.*spanish)(?=.*(latin|latam|lat\.|mexic))|latin american spanish/i, region: 'Latin America' },
         { test: /^(?=.*portuguese)(?=.*(portugal|european))|european portuguese/i, region: 'Western Europe' },
         { test: /portuguese|brazilian/i, region: 'Latin America' },
-        { test: /english/i, region: 'North America' },
+        { test: /english/i, region: 'Global (English)' },
         { test: /german|french|italian|spanish|castilian|dutch|flemish|greek|swedish|danish|norwegian|finnish|icelandic|irish|catalan|basque/i, region: 'Western Europe' },
         { test: /polish|czech|slovak|hungarian|romanian|bulgarian|croatian|serbian|slovenian|bosnian|albanian|ukrainian|lithuanian|latvian|estonian|macedonian/i, region: 'Central & Eastern Europe' },
         { test: /russian|kazakh|belarusian|armenian|georgian|azerbaijani|uzbek|kyrgyz|tajik/i, region: 'Russia & CIS' },
@@ -2213,7 +2215,7 @@ class MethodSection extends Section {
         return Ui.cards([
             { title: 'What was measured', body: measured },
             { title: 'Why reviews are a proxy, not a census', body: 'Reviewers are a self-selected slice of buyers, and the habit of writing reviews differs from market to market. Read shares as a relative signal between languages, not as country sales.' },
-            { title: 'How regions are defined', body: [`Every region chart uses the same ${Regions.names().length} market regions: ${Words.list(Regions.names())}.`, 'Player sentiment reviews are placed by the reviewer country given in the workbook, or by review language when there is none. The all-review table is placed by review language, with English counted under North America, so treat regions there as an approximation of markets.'] },
+            { title: 'How regions are defined', body: [`Every region chart uses the same ${Regions.names().length} market regions: ${Words.list(Regions.names())}.`, 'Player sentiment reviews are placed by the reviewer country given in the workbook, or by review language when there is none. English with no reviewer country goes to Global (English). The all-review table is placed by review language, so treat regions there as an approximation of markets.'] },
             { title: 'What the counts do not show', body: limits },
         ], 2);
     }
