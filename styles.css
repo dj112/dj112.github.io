@@ -39,19 +39,27 @@
   --text-faint:    #8c8c8c;
   --head-gray:     #9a9a9a;   /* table column headings */
 
-  /* sentiment tones (see .tone-* below) */
-  --red:   #e5484d;  --red-rgb:   229,72,77;
-  --sky:   #4cc2ff;  --sky-rgb:   76,194,255;    /* Request */
-  --green: #34c98c;  --green-rgb: 52,201,140;
-  --amber: #e8b34a;  --amber-rgb: 232,179,74;
+  /* sentiment tones (see .tone-* below). Mid-lightness, moderate chroma so they
+     read calm on the dark page; validated as a set for colour-blind separation
+     (worst pair CVD dE 9.9, normal-vision dE 19.9) and >= 3:1 on --bg-card. */
+  --neg:  #b15541;  --neg-rgb:  177,85,65;     /* Negative: brick */
+  --req:  #9879cc;  --req-rgb:  152,121,204;   /* Request: soft violet */
+  --pos:  #009c89;  --pos-rgb:  0,156,137;     /* Positive: deep teal */
+  --oth:  #858a93;  --oth-rgb:  133,138,147;   /* anything else: slate */
 
-  /* categorical series for part-to-whole charts (fixed order, never cycled) */
-  --s1: #4a8eff;
-  --s2: #d95926;
-  --s3: #199e70;
-  --s4: #c98500;
-  --s5: #d55181;
-  --s-other: #5f636b;
+  /* UI status colours (form messages only, never data) */
+  --red:   #d9695c;
+  --green: #3fae95;
+  --amber: #d4a64e;
+
+  /* region charts: one blue ramp, light (largest region) to dark, so they never
+     compete with the sentiment tones. Validated as an ordinal ramp on --bg-card. */
+  --s1: #9ec5f4;
+  --s2: #6da7ec;
+  --s3: #3987e5;
+  --s4: #256abf;
+  --s5: #184f95;
+  --s-other: #4b4f57;
 
   --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   --font-body:    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
@@ -338,7 +346,7 @@ input[type="file"]{ display:none; }
 .field input[type="date"]{ min-height:40px; cursor:pointer; }
 .field input.field-error{
   border-color:var(--red);
-  box-shadow:0 0 0 3px rgba(229,72,77,.12);
+  box-shadow:0 0 0 3px rgba(217,105,92,.14);
 }
 .field-note{
   font-size:12.5px;
@@ -390,10 +398,10 @@ input[type="file"]{ display:none; }
 }
 
 /* Tone variables: every coloured component reads --tone / --tone-rgb / --on-tone. */
-.tone-negative{ --tone:var(--red);   --tone-rgb:var(--red-rgb);   --on-tone:#fff; }
-.tone-request { --tone:var(--sky);   --tone-rgb:var(--sky-rgb);   --on-tone:#06202e; }
-.tone-positive{ --tone:var(--green); --tone-rgb:var(--green-rgb); --on-tone:#07120e; }
-.tone-other   { --tone:var(--amber); --tone-rgb:var(--amber-rgb); --on-tone:#151005; }
+.tone-negative{ --tone:var(--neg); --tone-rgb:var(--neg-rgb); --on-tone:#ffffff; }
+.tone-request { --tone:var(--req); --tone-rgb:var(--req-rgb); --on-tone:#121016; }
+.tone-positive{ --tone:var(--pos); --tone-rgb:var(--pos-rgb); --on-tone:#0b1513; }
+.tone-other   { --tone:var(--oth); --tone-rgb:var(--oth-rgb); --on-tone:#111316; }
 
 /* ---------- Document flow (the one place vertical rhythm is defined) ---------- */
 .section{ margin-top:var(--sp-7); }
@@ -637,7 +645,7 @@ input[type="file"]{ display:none; }
   border-radius:6px;
   font-size:var(--fs-small);
   font-weight:700;
-  background:rgba(var(--tone-rgb),.6);
+  background:var(--tone);
   color:var(--on-tone);
 }
 .cell-count.zero{ background:transparent; color:var(--text-faint); font-weight:500; }
@@ -808,6 +816,63 @@ input[type="file"]{ display:none; }
   color:var(--head-gray);
 }
 .region-head span:nth-child(3),.region-head span:nth-child(4){ text-align:right; }
+
+.region-row.rg,.region-head.rg{ grid-template-columns:12px minmax(0,1fr) 84px 58px 52px; }
+.region-head.rg span:nth-child(3){ text-align:left; }
+.mini-sent{
+  display:flex;
+  gap:2px;
+  height:8px;
+  overflow:hidden;
+  border-radius:999px;
+  background:var(--blue-track);
+}
+.mini-sent i{ display:block; min-width:2px; background:var(--tone); }
+
+/* Findings: tag, headline, evidence, quote, next step */
+.info-card.finding{ display:flex; flex-direction:column; }
+.f-tag{
+  margin-bottom:10px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:var(--ls-label);
+  text-transform:uppercase;
+  color:var(--blue);
+}
+.f-quote{
+  margin:14px 0 0;
+  padding:2px 0 2px 14px;
+  border-left:2px solid #3a3e47;
+  font-size:13px;
+  line-height:1.6;
+  font-style:italic;
+  color:var(--text-dim);
+}
+.f-quote cite{
+  display:block;
+  margin-top:4px;
+  font-size:11px;
+  font-style:normal;
+  letter-spacing:.04em;
+  color:var(--text-faint);
+}
+.info-card p.f-next{
+  margin-top:auto;
+  padding-top:14px;
+  font-size:13px;
+  color:var(--text);
+}
+.info-card p.f-next b{
+  display:block;
+  margin-bottom:3px;
+  font-size:10.5px;
+  font-weight:700;
+  letter-spacing:var(--ls-label);
+  text-transform:uppercase;
+  color:var(--text-faint);
+}
+.info-card.finding p + p.f-next,.info-card.finding .f-quote + p.f-next{ margin-top:auto; }
+.info-card.finding > p:not(.f-next){ margin-bottom:0; }
 
 /* Coverage tiers */
 .tier-grid{
@@ -981,63 +1046,6 @@ input[type="file"]{ display:none; }
 .scope-note a:hover{ text-decoration:underline; }
 .panel p.hint a{ color:var(--blue); }
 .scope-note + .scope-note{ margin-top:var(--sp-1); }
-
-/* Call to action */
-.cta{
-  padding:40px 44px 44px;
-  border:var(--border-card);
-  border-radius:var(--radius-card);
-  background:var(--bg-card);
-  break-inside:avoid;
-}
-.cta h3{
-  margin:14px 0 0;
-  font-family:var(--font-display);
-  font-weight:800;
-  font-size:32px;
-  line-height:1.15;
-  letter-spacing:-.025em;
-  text-wrap:balance;
-}
-.cta p{
-  margin:16px 0 0;
-  max-width:560px;
-  font-size:var(--fs-lede);
-  line-height:1.6;
-  color:var(--text-dim);
-}
-.cta-row{
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:space-between;
-  gap:var(--sp-5);
-  margin-top:30px;
-}
-.cta-pill{
-  display:inline-flex;
-  align-items:center;
-  min-height:54px;
-  padding:0 28px;
-  border-radius:999px;
-  background:var(--yellow);
-  color:#111;
-  font-size:13px;
-  font-weight:700;
-  letter-spacing:.09em;
-  white-space:nowrap;
-  text-transform:uppercase;
-  text-decoration:none;
-  transition:transform .2s var(--ease), box-shadow .2s var(--ease);
-}
-.cta-pill:hover{ transform:translateY(-1px); box-shadow:0 8px 24px rgba(255,216,77,.25); }
-.cta-mark{
-  font-family:var(--font-display);
-  font-weight:800;
-  font-size:28px;
-  letter-spacing:-.02em;
-  color:var(--blue);
-}
 
 /* ---------- 5. Cover ---------- */
 .doc-cover{
@@ -1382,7 +1390,4 @@ body.exported .app-shell{ padding-top:40px; }
   .ml-row{ grid-template-columns:96px minmax(0,1fr) 92px; gap:8px; }
   .ml-name{ font-size:12.5px; }
   .region-chart .donut{ max-width:240px; margin:0 auto; }
-  .cta{ padding:28px 22px; }
-  .cta-row{ flex-direction:column; align-items:flex-start; }
-  .cta-pill{ padding:12px 22px; font-size:12px; letter-spacing:.06em; white-space:normal; }
 }

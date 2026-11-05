@@ -38,11 +38,6 @@ const Config = Object.freeze({
         // Optional cover brand strip. Leave coverLogo blank to keep it hidden.
         coverLogo: '',
         coverServices: 'Game localization, LQA, voice-over and AI-assisted localization',
-        // Closing call to action. Leave contactEmail blank to drop the block.
-        contactEmail: 'info@allcorrectgames.com',
-        contactEyebrow: 'Get in touch',
-        contactHeadline: 'Want a language plan built on this data?',
-        contactText: 'We can turn this report into a scoped localization plan for your title, with your own sales and wishlist data alongside the review signal.',
     }),
     // Cumulative review share each coverage tier fills up to (all-review table only).
     coverage: Object.freeze([
@@ -103,6 +98,34 @@ const Config = Object.freeze({
         { label: 'Steamworks Documentation, Supported Currencies', url: 'https://partner.steamgames.com/doc/store/pricing/currencies' },
     ]),
     moneyLensRows: 12,
+    // Default region groups (the taxonomy of the Step 03 review table). Used when Step 03 is
+    // empty; when it is filled, its own Region column decides. Names are lower case.
+    regionGroups: Object.freeze([
+        ['English (global)', ['english']],
+        ['Western & Southern Europe', ['german', 'french', 'italian', 'spanish (spain)', 'spanish', 'portuguese (portugal)', 'dutch', 'greek']],
+        ['Greater China', ['chinese', 'chinese (simplified)', 'chinese (traditional)', 'simplified chinese', 'traditional chinese']],
+        ['Russia & Ukraine', ['russian', 'ukrainian']],
+        ['Japan & Korea', ['japanese', 'korean']],
+        ['Latin America', ['portuguese (brazil)', 'portuguese', 'brazilian portuguese', 'spanish (latin america)', 'latin american spanish']],
+        ['Central & Eastern Europe', ['polish', 'czech', 'hungarian', 'romanian', 'bulgarian']],
+        ['Middle East & Turkey', ['turkish', 'arabic']],
+        ['Nordics', ['swedish', 'danish', 'norwegian', 'finnish']],
+        ['Southeast Asia', ['thai', 'vietnamese', 'indonesian']],
+    ]),
+    // Keyword themes for the takeaways. Matched against each review's summary and English text.
+    // "next" is the suggested next step printed when the theme leads a card ({lang} = main language).
+    themes: Object.freeze([
+        { key: 'errors', label: 'translation errors', test: /translation (error|mistake|issue|problem)s?|mistranslat|incorrect|\berrors?\b|wrong|do(es)?n'?t match|do(es)? not match|inaccura|trashy|bad translation|poor translation|typo|text issues/i, next: 'Run a linguistic QA pass on the {lang} text, starting with the strings players quote.' },
+        { key: 'machine', label: 'machine or AI translation', test: /machine[- ]translat|\bai\b|google translate|auto[- ]?translat/i, next: 'Replace machine output with reviewed human translation in {lang}.' },
+        { key: 'blocker', label: 'text that blocks progress', test: /prevent\w*.{0,40}progress|can'?t progress|quest progression|guidance.{0,40}difficult|hard to understand|confus/i, next: 'Prioritise quest, tutorial and guidance text in {lang}: it stops players progressing.' },
+        { key: 'variant', label: 'wrong language variant', test: /brazilian portuguese|european portuguese|wrong (variant|dialect)|latin american spanish/i, next: 'Ship the regional variant players expect, or label the variant clearly on the store page.' },
+        { key: 'ui', label: 'text display and UI', test: /cut off|truncat|overflow|\bfont|text box|\bui\b|interface/i, next: 'Test {lang} for truncation and font coverage on every screen.' },
+        { key: 'voice', label: 'missing voice-over', test: /voice[- ]?over|voice acting|dubbing|\bdub\b|no voices/i, next: 'Decide whether subtitles are enough or a voice-over is worth scoping.' },
+        { key: 'fan', label: 'fan-made translation', test: /third[- ]party|fan[- ](made|translation)|community[- ](made|translation|patch)|russifier|unofficial (translation|patch)|translation patch|language patch/i },
+        { key: 'buy', label: 'buying or rating tied to the language', test: /will buy|would buy|buy (it|the game) (once|when|if)|condition for purchase|won'?t buy|not buy|refund|refus\w* to (leave|give)|negative (rating|review) (due|because)|(improve|raise|change) (their|my|the) (score|rating|review)|improve their score/i },
+        { key: 'praise', label: 'praise for translation quality', test: /prais|accura|good translation|great translation|high[- ]quality|well translated|comprehensive|thoughtful|captur\w*.{0,30}tone|satisf/i },
+        { key: 'added', label: 'welcome for a newly added language', test: /(was|been|finally|now) (been )?(added|updated)|newly added|addition of (the )?official|update of .{0,30}locali[sz]ation|now fully in|support was added/i },
+    ]),
     statusOrder: ['negative', 'request', 'positive'],
     statusLabels: { negative: 'Negative', request: 'Request', positive: 'Positive' },
     statusSynonyms: {
@@ -754,6 +777,83 @@ class PriceTable {
         return 'Read ' + bits.join('; ') + '.';
     }
 }
+/**
+ * Puts a language into a region group. Uses the Step 03 table's own Region column when it
+ * has one, otherwise Config.regionGroups. Bare names ("Portuguese") are resolved with the
+ * reviewer's country ("Brazil" -> the Brazilian variant's region).
+ */
+class RegionGrouper {
+    static HINTS = [
+        [/brazil|latin|latam|mexic|argentin|chile|colomb|peru|venez|uruguay|ecuador|bolivia|paraguay/i, /brazil|latin|latam|mexic/i],
+        [/portugal|spain|espa|europe/i, /portugal|spain|europe|\(spain\)/i],
+        [/taiwan|hong ?kong|\bhk\b|macau/i, /trad|taiwan|hong/i],
+        [/china|mainland/i, /simpl/i],
+    ];
+    static stem(lang) { return Text.normalize(lang).replace(/\(.*?\)/g, '').replace(/\b(simplified|traditional|brazilian|european|latin american|latam)\b/g, '').replace(/\s+/g, ' ').trim(); }
+    constructor(market) {
+        this.exact = new Map();
+        this.stems = new Map();
+        const add = (lang, group, weight) => {
+            const k = Text.normalize(lang);
+            if (!this.exact.has(k))
+                this.exact.set(k, group);
+            const st = RegionGrouper.stem(lang);
+            if (!this.stems.has(st))
+                this.stems.set(st, []);
+            this.stems.get(st).push({ lang: k, group, weight });
+        };
+        if (market && market.hasRegions) {
+            this.source = 'table';
+            market.langs.forEach(l => add(l.language, l.region, l.count));
+            this.order = market.regions.map(r => r.name);
+        }
+        else {
+            this.source = 'default';
+            Config.regionGroups.forEach(([group, langs]) => langs.forEach(l => add(l, group, 0)));
+            this.order = Config.regionGroups.map(([g]) => g);
+        }
+    }
+    group(language, country = '') {
+        const k = Text.normalize(language);
+        const bare = k === RegionGrouper.stem(language); // no variant given, e.g. "portuguese"
+        const cands = this.stems.get(RegionGrouper.stem(language)) || [];
+        const groups = [...new Set(cands.map(c => c.group))];
+        if (this.exact.has(k) && (!bare || groups.length <= 1))
+            return this.exact.get(k);
+        if (groups.length <= 1)
+            return groups[0] || '';
+        for (const [countryRe, variantRe] of RegionGrouper.HINTS) {
+            if (countryRe.test(country)) {
+                const hit = cands.find(c => variantRe.test(c.lang));
+                if (hit)
+                    return hit.group;
+            }
+        }
+        return this.exact.get(k) || cands.slice().sort((a, b) => b.weight - a.weight)[0].group;
+    }
+    /** Sentiment rows (region = reviewer country, language) -> region groups with status counts. */
+    tally(rows, defs) {
+        const map = new Map();
+        rows.forEach(row => {
+            const g = this.group(row.language, row.region) || 'Other languages';
+            if (!map.has(g))
+                map.set(g, { name: g, total: 0, counts: {}, languages: new Set() });
+            const e = map.get(g);
+            defs.forEach(s => {
+                const v = Text.num(row.counts[s.key]);
+                e.counts[s.key] = (e.counts[s.key] || 0) + v;
+                e.total += v;
+            });
+            e.languages.add(row.language);
+        });
+        return [...map.values()].filter(e => e.total > 0).sort((a, b) => b.total - a.total);
+    }
+    /** Fixed colour per group: its rank in this.order (so both region charts agree), top 5 only. */
+    colour(name) {
+        const i = this.order.indexOf(name);
+        return i >= 0 && i < Config.regionSlices ? `s${i + 1}` : 's-other';
+    }
+}
 /** Everything a section needs, in one object. */
 class ReportContext {
     constructor({ analysis, meta, reviews, market = null, marketScope = '', prices = null, filtered = false }) {
@@ -1150,6 +1250,14 @@ class Ui {
         reviews.forEach(r => { counts[r.statusKey] = (counts[r.statusKey] || 0) + 1; });
         return counts;
     }
+    /** Thin segmented sentiment bar with no text (the row beside it carries the figures). */
+    static miniSentiment(counts, defs) {
+        const segs = defs.map(s => {
+            const v = Text.num(counts[s.key]);
+            return v ? `<i class="tone-${s.tone}" style="flex:${v}"></i>` : '';
+        }).join('');
+        return `<span class="mini-sent">${segs}</span>`;
+    }
     /** Row of outlined hero-number tiles. items: [{ value, label }]. */
     static kpis(items) {
         const list = items.filter(Boolean);
@@ -1277,12 +1385,41 @@ class VoiceSentimentSection extends Section {
       </div>`).join('');
         return Ui.block(Ui.blockHead('Where tagged feedback is concentrated (top 5 regions)') + `<div class="ranking">${rows}</div>`);
     }
+    /** Every tagged review grouped into the Step 03 regions (or the default groups), as a donut + list. */
+    regionPie() {
+        const { analysis, market, statusDefs } = this.ctx;
+        const grouper = new RegionGrouper(market);
+        const groups = grouper.tally(analysis.rows, statusDefs);
+        if (groups.length < 2)
+            return '';
+        const total = groups.reduce((s, g) => s + g.total, 0);
+        const own = groups.filter(g => grouper.colour(g.name) !== 's-other');
+        const rest = groups.filter(g => grouper.colour(g.name) === 's-other');
+        const slices = own.map(g => ({ name: g.name, value: g.total, cls: grouper.colour(g.name) }));
+        if (rest.length)
+            slices.push({ name: `Other (${Words.list(rest.map(g => g.name))})`, value: rest.reduce((s, g) => s + g.total, 0), cls: 's-other' });
+        const rows = groups.map(g => `
+        <div class="region-row rg ${grouper.colour(g.name)}" title="${esc(g.name)}: ${statusDefs.map(s => `${s.label} ${g.counts[s.key] || 0}`).join(', ')}">
+          <i class="sw"></i>
+          <span class="nm">${esc(g.name)}<small>${esc(Words.list([...g.languages]))}</small></span>
+          ${Ui.miniSentiment(g.counts, statusDefs)}
+          <span class="ct">${Fmt.int(g.total)}</span>
+          <span class="sh">${Fmt.share(g.total / total * 100)}</span>
+        </div>`).join('');
+        const list = `<div class="region-list"><div class="region-head rg"><span></span><span>Region</span><span>Sentiment</span><span>Reviews</span><span>Share</span></div>${rows}</div>`;
+        const kicker = grouper.source === 'table' ? 'Regions as in the Step 03 review table' : 'Standard region groups (paste a Step 03 table to use your own)';
+        return Ui.block(Ui.blockHead('All tagged reviews by region', kicker)
+            + `<div class="region-chart">${Ui.donut(slices, { total, label: 'Tagged', title: 'Tagged reviews by region' })}${list}</div>`
+            + Ui.legend(statusDefs))
+            + Ui.note('Reviews are placed by review language, so English counts as English (global) wherever the reviewer lives. Portuguese, Spanish and Chinese without a stated variant are placed using the reviewer\'s country.');
+    }
     renderBody() {
         const { analysis, statusDefs } = this.ctx;
         return [
             this.kpiTiles(),
             Ui.block(Ui.blockHead('All tagged reviews, split by sentiment') + Ui.legend(statusDefs) + Ui.sentimentBar(analysis.totals, statusDefs, analysis.total)),
             this.regionBlock(),
+            this.regionPie(),
         ].join('');
     }
 }
@@ -1538,96 +1675,262 @@ class BreakdownSection extends Section {
     }
 }
 // ------------------------------------------------------------
-// Findings: plain-English takeaways computed from the figures.
-// Every sentence is a template filled with numbers; nothing is
-// generated by a model, so the report stays offline and token free.
-// To edit wording, change the strings below. Order = priority.
+// Findings: specific, evidence-backed takeaways with a next step.
+// Built from counts, the review summaries / English text (keyword
+// themes in Config.themes) and the Step 03 / 04 tables. Every
+// sentence is a template; nothing is generated by a model, so the
+// report stays offline and token free. Order below = priority.
 // ------------------------------------------------------------
 class Findings {
+    /** Language names a review can ask for. Case-sensitive where the word has another meaning ("polish"). */
+    static LANGS = [
+        ['Russian', /\brussian|russifier/i], ['Ukrainian', /\bukrainian/i], ['Turkish', /\bturkish|\bt[üu]rk[cç]e/i],
+        ['Polish', /\bPolish\b/], ['Arabic', /\barabic/i], ['Chinese', /\bchinese|mandarin/i], ['Japanese', /\bjapanese/i],
+        ['Korean', /\bkorean/i], ['Portuguese', /\bportuguese|\bbrazilian\b/i], ['Spanish', /\bspanish/i],
+        ['German', /\bgerman\b/i], ['French', /\bfrench\b/i], ['Italian', /\bitalian/i], ['Czech', /\bczech/i],
+        ['Hungarian', /\bhungarian/i], ['Romanian', /\bromanian/i], ['Bulgarian', /\bbulgarian/i], ['Greek', /\bgreek/i],
+        ['Dutch', /\bdutch\b/i], ['Swedish', /\bswedish/i], ['Danish', /\bdanish/i], ['Norwegian', /\bnorwegian/i],
+        ['Finnish', /\bfinnish/i], ['Thai', /\bthai\b/i], ['Vietnamese', /\bvietnamese/i], ['Indonesian', /\bindonesian/i],
+        ['Hindi', /\bhindi\b/i], ['Hebrew', /\bhebrew/i], ['Persian', /\bpersian|\bfarsi/i], ['Kazakh', /\bkazakh/i],
+        ['Georgian', /\bgeorgian/i], ['Slovak', /\bslovak/i], ['Croatian', /\bcroatian/i], ['Serbian', /\bserbian/i],
+        ['Lithuanian', /\blithuanian/i], ['Latvian', /\blatvian/i], ['Estonian', /\bestonian/i], ['Filipino', /\bfilipino|\btagalog/i],
+    ];
+    static text(r) { return `${r.summary || ''}\n${r.englishText || ''}`; }
+    static has(r, key) {
+        const t = Config.themes.find(x => x.key === key);
+        return !!t && t.test.test(Findings.text(r));
+    }
+    static base(lang) { return String(lang || '').replace(/\s*\(.*?\)\s*/g, '').trim(); }
+    /** Which language a request asks for: the column if present, else the first language named in the summary, else the review language. */
+    static requested(r) {
+        if (r.requestedLanguage)
+            return Findings.base(r.requestedLanguage);
+        for (const source of [r.summary, r.englishText]) {
+            let best = null;
+            Findings.LANGS.forEach(([name, re]) => {
+                const m = re.exec(String(source || ''));
+                if (m && (!best || m.index < best.index))
+                    best = { name, index: m.index };
+            });
+            if (best)
+                return best.name;
+        }
+        const own = Findings.base(r.language);
+        return /^english$/i.test(own) ? '' : own;
+    }
+    static used = new Set();
+    static PROFANITY = /\b(shit|fuck|crap|bitch|bastard|asshole|piss|dick|cunt|wtf)\w*/i;
+    /** A sentence from the players' English text that matches the finding (re), clean and 25-170 characters. No match, no quote. */
+    static quote(reviews, re) {
+        const found = [];
+        reviews.forEach(r => {
+            String(r.englishText || '').replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).forEach(sentence => {
+                const q = sentence.trim();
+                if (q.length >= 25 && q.length <= 170 && re.test(q) && !Findings.PROFANITY.test(q) && !Findings.used.has(q))
+                    found.push({ r, q });
+            });
+        });
+        if (!found.length)
+            return null;
+        const pick = found.sort((a, b) => Math.abs(a.q.length - 80) - Math.abs(b.q.length - 80))[0];
+        Findings.used.add(pick.q); // each quote appears once per report
+        return { text: pick.q, lang: pick.r.language, region: pick.r.region };
+    }
+    static langRe(lang) { return (Findings.LANGS.find(([n]) => n === lang) || [null, new RegExp(`\\b${lang}`, 'i')])[1]; }
+    static themeRe(...keys) { return new RegExp(Config.themes.filter(t => keys.includes(t.key)).map(t => t.test.source).join('|'), 'i'); }
+    static tally(items, key) {
+        const m = new Map();
+        items.forEach(x => { const k = key(x); if (k) m.set(k, (m.get(k) || 0) + 1); });
+        return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    }
+    static list(pairs, max = 4) { return Words.list(pairs.slice(0, max).map(([k, n]) => `${k} (${n})`)); }
+    static supportOf(ctx, lang) {
+        const m = ctx.market;
+        if (!m || !m.hasSupport)
+            return null;
+        const rows = m.langs.filter(l => Findings.base(l.language).toLowerCase() === lang.toLowerCase() || l.language.toLowerCase().includes(lang.toLowerCase()));
+        if (!rows.length)
+            return null;
+        return { supported: rows.some(l => l.supported === true), share: rows.reduce((s, l) => s + l.share, 0), count: rows.reduce((s, l) => s + l.count, 0) };
+    }
+    // ---------- Individual findings (each returns a card or null) ----------
+    static demand(ctx) {
+        const reqs = ctx.reviews.filter(r => r.statusKey === 'request');
+        const by = Findings.tally(reqs, Findings.requested);
+        if (!by.length || by[0][1] < 3)
+            return null;
+        const [lang, n] = by[0];
+        const mine = reqs.filter(r => Findings.requested(r) === lang);
+        const other = Findings.tally(mine.filter(r => Findings.base(r.language) !== lang), r => Findings.base(r.language));
+        const fan = mine.filter(r => Findings.has(r, 'fan')).length;
+        const buy = mine.filter(r => Findings.has(r, 'buy')).length;
+        const sup = Findings.supportOf(ctx, lang);
+        const facts = [`${Fmt.pct(n / reqs.length * 100)} of all ${Fmt.int(reqs.length)} language requests.`];
+        if (other.length)
+            facts.push(`${Fmt.int(other.reduce((s, [, c]) => s + c, 0))} come from players writing in ${Words.list(other.map(([k]) => k))}.`);
+        if (fan)
+            facts.push(`${Fmt.int(fan)} mention using a fan-made translation.`);
+        if (buy)
+            facts.push(`${Fmt.int(buy)} tie buying or rating the game to it.`);
+        if (sup)
+            facts.push(`${lang} reviews make up ${Fmt.share(sup.share)} of all reviews in scope${sup.supported ? ', and the table lists it as supported' : ''}.`);
+        return {
+            tag: 'Demand',
+            title: `${lang} is the most requested language: ${Fmt.int(n)} of ${Fmt.int(reqs.length)} requests`,
+            body: facts.join(' '),
+            quote: Findings.quote(mine, Findings.langRe(lang)),
+            next: sup && sup.supported
+                ? `${lang} is listed as supported, so check that players can find and select it, and that the store page says so.`
+                : `Scope ${lang} as the next language.${fan ? ' Fan patches show players already work around the gap.' : ''}`,
+        };
+    }
+    static runnersUp(ctx) {
+        const reqs = ctx.reviews.filter(r => r.statusKey === 'request');
+        const by = Findings.tally(reqs, Findings.requested).slice(1).filter(([, n]) => n >= 2);
+        if (by.length < 1)
+            return null;
+        const head = by.slice(0, 2);
+        const rest = Findings.tally(reqs, Findings.requested).slice(1 + head.length);
+        return {
+            tag: 'Demand',
+            title: head.length === 2
+                ? `${head[0][0]} and ${head[1][0]} follow with ${head[0][1]} and ${head[1][1]} requests`
+                : `${head[0][0]} follows with ${head[0][1]} requests`,
+            body: rest.length ? `Also asked for: ${Findings.list(rest, 5)}.` : 'No other language is requested more than once.',
+            quote: Findings.quote(reqs.filter(r => Findings.requested(r) === head[0][0]), Findings.langRe(head[0][0])),
+            next: 'Weigh these against their review share and Steam price before adding them to the next wave.',
+        };
+    }
+    static revenue(ctx) {
+        const hits = ctx.reviews.filter(r => Findings.has(r, 'buy'));
+        if (hits.length < 2)
+            return null;
+        const langs = Findings.tally(hits, r => (r.statusKey === 'request' && Findings.requested(r)) || Findings.base(r.language));
+        return {
+            tag: 'Revenue',
+            title: `${Fmt.int(hits.length)} players tie buying or rating the game to a language`,
+            body: `Languages involved: ${Findings.list(langs)}. These reviews say they would buy, refund, or change their score depending on language support.`,
+            quote: Findings.quote(hits, /buy|purchase|refund|review|rating|score|recommend/i),
+            next: 'Count these as delayed or lost sales, not only feature requests.',
+        };
+    }
+    static quality(ctx) {
+        const negs = ctx.reviews.filter(r => r.statusKey === 'negative');
+        if (negs.length < 2)
+            return null;
+        const issueThemes = Config.themes.filter(t => t.next);
+        const counts = issueThemes.map(t => ({ t, hits: negs.filter(r => t.test.test(Findings.text(r))) })).filter(x => x.hits.length).sort((a, b) => b.hits.length - a.hits.length);
+        if (!counts.length)
+            return null;
+        const top = counts[0];
+        const langs = Findings.tally(top.hits, r => Findings.base(r.language));
+        const also = counts.slice(1, 4).map(x => `${x.t.label} (${x.hits.length})`);
+        return {
+            tag: 'Quality',
+            title: `Top complaint: ${top.t.label} (${top.hits.length} of ${negs.length} negative reviews)`,
+            body: `By language: ${Findings.list(langs)}.${also.length ? ` Also raised: ${Words.list(also)}.` : ''}`,
+            quote: Findings.quote(top.hits, top.t.test),
+            next: top.t.next.replace('{lang}', langs[0][0]),
+        };
+    }
+    static strength(ctx) {
+        const a = ctx.analysis;
+        const best = a.languages
+            .map(l => ({ l, pos: l.counts.positive || 0, neg: l.counts.negative || 0 }))
+            .filter(x => x.pos >= 3 && x.pos > x.neg)
+            .sort((x, y) => y.pos - x.pos)[0];
+        if (!best)
+            return null;
+        const pos = ctx.reviews.filter(r => r.statusKey === 'positive' && r.language === best.l.language);
+        const added = pos.filter(r => Findings.has(r, 'added')).length;
+        const praise = pos.filter(r => Findings.has(r, 'praise')).length;
+        const why = [added ? `${added} welcome the language being added` : '', praise ? `${praise} praise the translation quality` : ''].filter(Boolean);
+        return {
+            language: best.l.language,
+            tag: 'Strength',
+            title: `${best.l.language} players respond well: ${best.pos} positive, ${best.neg} negative`,
+            body: `${why.length ? `Of the positive reviews, ${Words.list(why)}.` : `${best.pos} of ${best.l.total} tagged ${best.l.language} reviews are positive.`}${best.neg ? ` The ${best.neg} negative ${best.neg === 1 ? 'one needs' : 'ones need'} a look before this becomes a pattern.` : ''}`,
+            quote: Findings.quote(pos, new RegExp(`${Findings.themeRe('praise', 'added').source}|${Findings.langRe(Findings.base(best.l.language)).source}|translat|locali`, 'i')),
+            next: `Quote these reviews on the ${best.l.language} store page and in launch messaging.`,
+        };
+    }
+    static critical(ctx, skip) {
+        const a = ctx.analysis;
+        const overall = (a.totals.negative || 0) / (a.total || 1);
+        const worst = a.languages
+            .filter(l => l.total >= 5 && (l.counts.negative || 0) >= 3 && !skip.has(l.language))
+            .map(l => ({ l, rate: l.counts.negative / l.total }))
+            .filter(x => x.rate >= overall * 1.5)
+            .sort((x, y) => y.rate - x.rate)[0];
+        if (!worst)
+            return null;
+        return {
+            tag: 'Risk',
+            title: `${worst.l.language} is the most critical audience: ${Fmt.pct(worst.rate * 100)} negative`,
+            body: `${worst.l.counts.negative} of ${worst.l.total} tagged ${worst.l.language} reviews are negative, against ${Fmt.pct(overall * 100)} overall.`,
+            quote: Findings.quote(ctx.reviews.filter(r => r.statusKey === 'negative' && r.language === worst.l.language), /translat|locali|text|language|wrong|error/i),
+            next: `Read the ${worst.l.language} reviews in the full log before the next patch.`,
+        };
+    }
+    static coverage(ctx) {
+        const m = ctx.market;
+        if (!m)
+            return null;
+        const t1 = m.tiers().tiers[0];
+        if (!t1 || t1.langs.length >= m.activeLangs.length)
+            return null;
+        const gaps = m.hasSupport ? t1.langs.filter(l => l.supported === false) : [];
+        return {
+            tag: 'Reach',
+            title: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews`,
+            body: `${Words.list(t1.langs.map(l => `${l.language} (${Fmt.share(l.share)})`))}, ${Fmt.int(t1.count)} of ${Fmt.int(m.total)} reviews.${gaps.length ? ` Not yet supported among them: ${Words.list(gaps.map(l => l.language))}.` : ''}`,
+            next: gaps.length ? `Close the gap in ${Words.list(gaps.map(l => l.language))} first.` : 'Hold these languages to the highest quality bar; they carry most of the audience.',
+        };
+    }
+    static unsupported(ctx) {
+        const m = ctx.market;
+        if (!m || !m.hasSupport)
+            return null;
+        const gaps = m.unsupported;
+        const share = m.share(gaps.reduce((s, l) => s + l.count, 0));
+        if (!gaps.length || share < 2)
+            return null;
+        const top = gaps[0];
+        return {
+            tag: 'Reach',
+            title: `${top.language} is the largest unsupported language: ${Fmt.share(top.share)} of reviews`,
+            body: `${Fmt.int(top.count)} reviews, ranking ${Words.ordinal(m.activeLangs.indexOf(top) + 1)} of ${m.activeLangs.length} review languages. All unsupported languages together hold ${Fmt.pct(share)}.`,
+            next: `Check ${top.language} against the request count and its Steam price before scoping it.`,
+        };
+    }
+    static quiet(ctx) {
+        const m = ctx.market;
+        const quiet = m && m.hasSupport ? m.langs.filter(l => l.supported === true && l.share < Config.quietShare) : [];
+        if (!quiet.length)
+            return null;
+        return {
+            tag: 'Watch',
+            title: quiet.length === 1 ? `${quiet[0].language} is supported but quiet` : `${Words.count(quiet.length, 'supported language', true)} stay quiet`,
+            body: `${Words.list(quiet.map(l => `${l.language} (${Fmt.share(l.share)})`))} each draw under ${Config.quietShare}% of reviews.`,
+            next: 'Check store visibility and marketing in those markets before reading this as no audience.',
+        };
+    }
     static build(ctx) {
         const out = [];
-        const m = ctx.market, a = ctx.analysis;
-        const push = f => { if (f) out.push(f); };
-        if (m) {
-            const { tiers } = m.tiers();
-            const t1 = tiers[0];
-            if (t1 && t1.langs.length < m.activeLangs.length)
-                push({
-                    title: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews`,
-                    body: `${Words.list(t1.langs.map(l => l.language))} account for ${Fmt.int(t1.count)} of ${Fmt.int(m.total)} reviews. This is the core of any language plan for this title.`,
-                });
-            if (m.hasSupport) {
-                const gaps = m.unsupported;
-                const gapCount = gaps.reduce((s, l) => s + l.count, 0);
-                const gapShare = m.share(gapCount);
-                const top = gaps[0];
-                if (top && gapShare >= 2)
-                    push({
-                        title: `${top.language} is the largest language without localization`,
-                        body: `${Fmt.int(top.count)} reviews, ${Fmt.share(top.share)} of the total, ranking ${Words.ordinal(m.activeLangs.indexOf(top) + 1)} of ${m.activeLangs.length} review languages. These players already buy and review the game without a version in their language.`,
-                    });
-                if (gaps.length && gapShare >= 2)
-                    push({
-                        title: `${Fmt.pct(gapShare)} of reviews come from unsupported languages`,
-                        body: `${Fmt.int(gapCount)} reviews across ${Words.count(gaps.length, 'language')} the game does not support, led by ${Words.list(gaps.slice(0, 3).map(l => l.language))}.`,
-                    });
-                else if (m.supported.length)
-                    push({
-                        title: `Supported languages cover ${Fmt.pct(m.share(m.supported.reduce((s, l) => s + l.count, 0)))} of reviews`,
-                        body: gaps.length
-                            ? `Only ${Fmt.int(gapCount)} reviews arrive in the ${Words.count(gaps.length, 'review language')} the game does not support, the largest being ${top.language} (${Fmt.int(top.count)}). The current language list already matches where reviewers are.`
-                            : 'Every review language in this table is supported. The current language list already matches where reviewers are.',
-                    });
-            }
-        }
-        if (a.total) {
-            const neg = a.totals.negative || 0, req = a.totals.request || 0, pos = a.totals.positive || 0;
-            if (neg) {
-                const tail = [req ? `${Fmt.int(req)} ask for a language` : '', pos ? `${Fmt.int(pos)} are positive` : ''].filter(Boolean);
-                push({
-                    title: `${Fmt.pct(neg / a.total * 100)} of tagged feedback is negative`,
-                    body: `${Fmt.int(neg)} of ${Fmt.int(a.total)} localization-related reviews are negative${tail.length ? `, ${Words.list(tail)}` : ''}.`,
-                });
-            }
-            const worst = a.languages.filter(l => (l.counts.negative || 0) > 0).sort((x, y) => y.counts.negative - x.counts.negative)[0];
-            if (worst && a.languages.length > 1)
-                push({
-                    title: `${worst.language} carries the most negative feedback`,
-                    body: `${Fmt.int(worst.counts.negative)} negative reviews, ${Fmt.pct(worst.counts.negative / worst.total * 100)} of the ${Fmt.int(worst.total)} tagged reviews in this language.`,
-                });
-            const requests = ctx.reviews.filter(r => r.statusKey === 'request');
-            const wanted = Lists.mode(requests.map(r => r.requestedLanguage));
-            if (wanted) {
-                const n = requests.filter(r => r.requestedLanguage.trim() === wanted).length;
-                push({
-                    title: `Players ask most often for ${wanted}`,
-                    body: `${Fmt.int(n)} of ${Fmt.int(requests.length)} language requests name ${wanted}.`,
-                });
-            }
-        }
-        if (m) {
-            const top = m.hasRegions ? m.regions.find(r => !/english/i.test(r.name)) : null;
-            if (top) {
-                const lead = top.languages.slice().sort((x, y) => y.count - x.count)[0];
-                push({
-                    title: `${top.name} is the largest region outside English`,
-                    body: `${Fmt.pct(top.share)} of reviews (${Fmt.int(top.count)}) across ${Words.count(top.activeLanguages, 'language')}, led by ${lead.language} with ${Fmt.int(lead.count)}.`,
-                });
-            }
-            const en = m.langs.find(l => /^english\b/i.test(l.language));
-            if (en && en.share >= 15)
-                push({
-                    title: 'English is the floor, not the ceiling',
-                    body: `English takes ${Fmt.pct(en.share)} of reviews. Many players outside English-speaking markets also write in English to be read widely, so read this share as reach rather than as the size of the English-speaking market.`,
-                });
-            const quiet = m.hasSupport ? m.langs.filter(l => l.supported === true && l.share < Config.quietShare) : [];
-            if (quiet.length)
-                push({
-                    title: quiet.length === 1 ? `${quiet[0].language} is supported but quiet` : 'Some supported languages stay quiet',
-                    body: `${Words.list(quiet.map(l => l.language))} ${quiet.length === 1 ? 'is' : 'are'} localized but each draws under ${Config.quietShare}% of reviews. Treat this as an open question about store visibility and marketing in those markets, not as proof of no audience.`,
-                });
-        }
-        return out.slice(0, Config.findingsCount);
+        const push = f => { if (f && out.length < Config.findingsCount) out.push(f); };
+        Findings.used = new Set();
+        const strength = Findings.strength(ctx);
+        push(Findings.demand(ctx));
+        push(Findings.quality(ctx));
+        push(Findings.revenue(ctx));
+        push(strength);
+        push(Findings.runnersUp(ctx));
+        // A language already covered by the Strength card (which notes its negatives) is not repeated as a Risk.
+        push(Findings.critical(ctx, new Set(strength ? [strength.language] : [])));
+        push(Findings.coverage(ctx));
+        push(Findings.unsupported(ctx));
+        push(Findings.quiet(ctx));
+        return out;
     }
 }
 // ------------------------------------------------------------
@@ -1635,11 +1938,21 @@ class Findings {
 // ------------------------------------------------------------
 class KeyFindingsSection extends Section {
     get eyebrow() { return 'What the data says'; }
-    get title() { return `${Words.count(this.items().length, 'takeaway', true)} [[from the data]]`; }
-    get howToRead() { return this.ctx.market ? `Each point is calculated from the figures in this report. Shares are of all ${Fmt.int(this.ctx.market.total)} reviews in scope unless a language or sentiment is named.` : 'Each point is calculated from the figures in this report.'; }
+    get title() { return 'What to [[act on]]'; }
+    get howToRead() { return 'Each card states what the data shows, the reviews behind it and a suggested next step. Requested languages and themes are found by keyword matching on the review summaries and English text, so read the quoted review before acting.'; }
     items() { return this._items || (this._items = Findings.build(this.ctx)); }
     isAvailable() { return this.items().length >= 2; }
-    renderBody() { return Ui.cards(this.items()); }
+    card(f) {
+        const quote = f.quote ? `<blockquote class="f-quote">"${esc(f.quote.text)}"<cite>${esc([f.quote.lang, f.quote.region].filter(Boolean).join(', '))}</cite></blockquote>` : '';
+        return `<article class="info-card finding">
+        <div class="f-tag">${esc(f.tag)}</div>
+        <h3>${esc(f.title)}</h3>
+        <p>${esc(f.body)}</p>
+        ${quote}
+        ${f.next ? `<p class="f-next"><b>Next step</b>${esc(f.next)}</p>` : ''}
+      </article>`;
+    }
+    renderBody() { return `<div class="card-grid cols-2">${this.items().map(f => this.card(f)).join('')}</div>`; }
 }
 // ------------------------------------------------------------
 // 6. Where reviews come from: region donut + ranked list.
@@ -1905,24 +2218,6 @@ class MethodSection extends Section {
         ], 2);
     }
 }
-// ------------------------------------------------------------
-// 10. Closing call to action (Config.brand.contact*)
-// ------------------------------------------------------------
-class ContactSection extends Section {
-    isAvailable() { return !!Config.brand.contactEmail; }
-    renderBody() {
-        const b = Config.brand;
-        return `<div class="cta">
-        <div class="eyebrow">${esc(b.contactEyebrow)}</div>
-        <h3>${esc(b.contactHeadline)}</h3>
-        <p>${esc(b.contactText)}</p>
-        <div class="cta-row">
-          <a class="cta-pill" href="mailto:${esc(b.contactEmail)}">${esc(b.contactEyebrow)} · ${esc(b.contactEmail)}</a>
-          <span class="cta-mark">Allcorrect</span>
-        </div>
-      </div>`;
-    }
-}
 // ============================================================
 // SECTION ORDER. One line per section: delete a line to drop it,
 // move a line to reorder. Sections hide themselves when their
@@ -1940,7 +2235,6 @@ const SECTION_REGISTRY = [
     CoverageSection,
     MoneyLensSection,
     MethodSection,
-    ContactSection,
 ];
 /* ===== document.js ===== */
 /* ============================================================
