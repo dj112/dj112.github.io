@@ -817,8 +817,27 @@ input[type="file"]{ display:none; }
 }
 .region-head span:nth-child(3),.region-head span:nth-child(4){ text-align:right; }
 
-.region-row.rg,.region-head.rg{ grid-template-columns:12px minmax(0,1fr) 84px 58px 52px; }
-.region-head.rg span:nth-child(3){ text-align:left; }
+.block-sub{
+  margin-top:var(--sp-5) !important;
+  padding-top:var(--sp-5);
+  border-top:1px solid var(--line-soft);
+}
+.block-sub > * + *{ margin-top:var(--sp-3); }
+.tbl.region-sentiment{ table-layout:fixed; font-size:13.5px; }
+.tbl.region-sentiment th:nth-child(1){ width:27%; }
+.tbl.region-sentiment th:nth-child(2){ width:21%; }
+.tbl.region-sentiment th:nth-child(n+3){ width:13%; }
+.tbl.region-sentiment thead th{ letter-spacing:.08em; padding-left:var(--sp-2); }
+.tbl.region-sentiment td.rs-name{ font-weight:600; overflow-wrap:anywhere; }
+.tbl.region-sentiment td.rs-bar{ padding-right:var(--sp-4); }
+.tbl.region-sentiment td.rs-neg{ font-weight:600; color:var(--text-dim); }
+.tbl.region-sentiment .mini-sent{ height:10px; }
+.tbl.breakdown td.lang small{
+  display:block;
+  margin-top:2px;
+  font-size:11.5px;
+  color:var(--text-faint);
+}
 .mini-sent{
   display:flex;
   gap:2px;
@@ -1388,6 +1407,7 @@ body.exported .app-shell{ padding-top:40px; }
   .kpi-grid.cols-3{ grid-template-columns:repeat(2,minmax(0,1fr)); }
   .region-chart{ grid-template-columns:1fr; }
   .ml-row{ grid-template-columns:96px minmax(0,1fr) 92px; gap:8px; }
+  .tbl.region-sentiment th:nth-child(2),.tbl.region-sentiment td.rs-bar{ display:none; }
   .ml-name{ font-size:12.5px; }
   .region-chart .donut{ max-width:240px; margin:0 auto; }
 }

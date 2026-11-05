@@ -98,19 +98,35 @@ const Config = Object.freeze({
         { label: 'Steamworks Documentation, Supported Currencies', url: 'https://partner.steamgames.com/doc/store/pricing/currencies' },
     ]),
     moneyLensRows: 12,
-    // Default region groups (the taxonomy of the Step 03 review table). Used when Step 03 is
-    // empty; when it is filled, its own Region column decides. Names are lower case.
-    regionGroups: Object.freeze([
-        ['English (global)', ['english']],
-        ['Western & Southern Europe', ['german', 'french', 'italian', 'spanish (spain)', 'spanish', 'portuguese (portugal)', 'dutch', 'greek']],
-        ['Greater China', ['chinese', 'chinese (simplified)', 'chinese (traditional)', 'simplified chinese', 'traditional chinese']],
-        ['Russia & Ukraine', ['russian', 'ukrainian']],
-        ['Japan & Korea', ['japanese', 'korean']],
-        ['Latin America', ['portuguese (brazil)', 'portuguese', 'brazilian portuguese', 'spanish (latin america)', 'latin american spanish']],
-        ['Central & Eastern Europe', ['polish', 'czech', 'hungarian', 'romanian', 'bulgarian']],
-        ['Middle East & Turkey', ['turkish', 'arabic']],
-        ['Nordics', ['swedish', 'danish', 'norwegian', 'finnish']],
-        ['Southeast Asia', ['thai', 'vietnamese', 'indonesian']],
+    // Standard games-marketing regions. Every chart that shows regions uses only these,
+    // in this order of definition. A review is placed by the reviewer's country when the
+    // workbook gives one ("Brazil", "Taiwan / HK", "CIS"), otherwise by its review language.
+    marketRegions: Object.freeze([
+        { name: 'North America', countries: ['united states', 'usa', 'us', 'america', 'canada', 'north america'] },
+        { name: 'Latin America', countries: ['latin america', 'latam', 'south america', 'central america', 'mexico', 'brazil', 'argentina', 'chile', 'colombia', 'peru', 'venezuela', 'uruguay', 'paraguay', 'bolivia', 'ecuador', 'costa rica', 'panama', 'guatemala', 'honduras', 'el salvador', 'nicaragua', 'dominican republic', 'cuba', 'puerto rico'] },
+        { name: 'Western Europe', countries: ['western europe', 'europe', 'eu', 'united kingdom', 'uk', 'great britain', 'britain', 'england', 'scotland', 'wales', 'ireland', 'germany', 'austria', 'switzerland', 'dach', 'france', 'belgium', 'netherlands', 'luxembourg', 'benelux', 'spain', 'portugal', 'italy', 'greece', 'malta', 'cyprus', 'sweden', 'norway', 'denmark', 'finland', 'iceland', 'nordics', 'scandinavia'] },
+        { name: 'Central & Eastern Europe', countries: ['central & eastern europe', 'eastern europe', 'central europe', 'cee', 'poland', 'czechia', 'czech republic', 'slovakia', 'hungary', 'romania', 'bulgaria', 'croatia', 'slovenia', 'serbia', 'bosnia', 'montenegro', 'north macedonia', 'albania', 'lithuania', 'latvia', 'estonia', 'baltics', 'balkans', 'ukraine', 'moldova'] },
+        { name: 'Russia & CIS', countries: ['russia & cis', 'russia', 'russian federation', 'cis', 'belarus', 'kazakhstan', 'uzbekistan', 'kyrgyzstan', 'tajikistan', 'turkmenistan', 'armenia', 'azerbaijan', 'georgia'] },
+        { name: 'Middle East & Africa', countries: ['middle east & africa', 'middle east', 'mena', 'mea', 'africa', 'gcc', 'turkey', 'türkiye', 'turkiye', 'saudi arabia', 'ksa', 'uae', 'united arab emirates', 'qatar', 'kuwait', 'bahrain', 'oman', 'israel', 'jordan', 'lebanon', 'iraq', 'iran', 'egypt', 'morocco', 'algeria', 'tunisia', 'nigeria', 'kenya', 'south africa'] },
+        { name: 'East Asia', countries: ['east asia', 'greater china', 'china', 'mainland china', 'prc', 'taiwan', 'hong kong', 'hk', 'macau', 'japan', 'south korea', 'korea', 'mongolia'] },
+        { name: 'Southeast Asia', countries: ['southeast asia', 'sea', 'thailand', 'vietnam', 'indonesia', 'philippines', 'malaysia', 'singapore', 'myanmar', 'cambodia', 'laos'] },
+        { name: 'South Asia', countries: ['south asia', 'india', 'pakistan', 'bangladesh', 'sri lanka', 'nepal', 'bhutan'] },
+        { name: 'Oceania', countries: ['oceania', 'anz', 'australia', 'new zealand'] },
+    ]),
+    // Review language -> market region, used when no country is given. First match wins,
+    // so language variants come before the bare language name.
+    languageRegions: Object.freeze([
+        { test: /^(?=.*spanish)(?=.*(latin|latam|lat\.|mexic))|latin american spanish/i, region: 'Latin America' },
+        { test: /^(?=.*portuguese)(?=.*(portugal|european))|european portuguese/i, region: 'Western Europe' },
+        { test: /portuguese|brazilian/i, region: 'Latin America' },
+        { test: /english/i, region: 'North America' },
+        { test: /german|french|italian|spanish|castilian|dutch|flemish|greek|swedish|danish|norwegian|finnish|icelandic|irish|catalan|basque/i, region: 'Western Europe' },
+        { test: /polish|czech|slovak|hungarian|romanian|bulgarian|croatian|serbian|slovenian|bosnian|albanian|ukrainian|lithuanian|latvian|estonian|macedonian/i, region: 'Central & Eastern Europe' },
+        { test: /russian|kazakh|belarusian|armenian|georgian|azerbaijani|uzbek|kyrgyz|tajik/i, region: 'Russia & CIS' },
+        { test: /turkish|arabic|hebrew|persian|farsi|swahili|afrikaans|amharic/i, region: 'Middle East & Africa' },
+        { test: /chinese|mandarin|cantonese|japanese|korean|mongolian/i, region: 'East Asia' },
+        { test: /thai|vietnamese|indonesian|malay|filipino|tagalog|khmer|burmese|lao/i, region: 'Southeast Asia' },
+        { test: /hindi|bengali|bangla|urdu|tamil|telugu|marathi|punjabi|gujarati|sinhala|nepali/i, region: 'South Asia' },
     ]),
     // Keyword themes for the takeaways. Matched against each review's summary and English text.
     // "next" is the suggested next step printed when the theme leads a card ({lang} = main language).
@@ -396,16 +412,39 @@ class SentimentAnalysis {
             const language = languageMap.get(row.language);
             statusDefs.forEach(s => { language.counts[s.key] += Text.num(row.counts[s.key]); });
             language.total += rowTotal;
-            if (!regionMap.has(row.region))
-                regionMap.set(row.region, { name: row.region, rows: [], total: 0, firstIndex: index });
-            const region = regionMap.get(row.region);
-            region.rows.push({ ...row, total: rowTotal });
+            // Regions are always the standard market regions; the workbook's own region
+            // (usually a country) only decides which one.
+            const name = Regions.place(row.language, row.region);
+            if (!regionMap.has(name)) {
+                const counts = {};
+                statusDefs.forEach(s => { counts[s.key] = 0; });
+                regionMap.set(name, { name, rowMap: new Map(), counts, total: 0, firstIndex: index });
+            }
+            const region = regionMap.get(name);
+            if (!region.rowMap.has(row.language)) {
+                const counts = {};
+                statusDefs.forEach(s => { counts[s.key] = 0; });
+                region.rowMap.set(row.language, { region: name, language: row.language, countries: new Set(), counts, total: 0 });
+            }
+            const lr = region.rowMap.get(row.language);
+            if (row.region && row.region !== 'Unspecified')
+                lr.countries.add(row.region);
+            statusDefs.forEach(s => {
+                const v = Text.num(row.counts[s.key]);
+                lr.counts[s.key] += v;
+                region.counts[s.key] += v;
+            });
+            lr.total += rowTotal;
             region.total += rowTotal;
         });
         const byVolume = (a, b) => (b.total - a.total) || (a.firstIndex - b.firstIndex);
         this.languages = [...languageMap.values()].sort(byVolume);
-        this.regions = [...regionMap.values()];
-        this.regionsByVolume = [...this.regions].sort(byVolume);
+        this.regionsByVolume = [...regionMap.values()]
+            .map(r => ({ ...r, rows: [...r.rowMap.values()].sort((a, b) => b.total - a.total) }))
+            .sort(byVolume);
+        // Breakdown order: the fixed standard order, so every report lists regions the same way.
+        const order = n => { const i = Regions.names().indexOf(n); return i < 0 ? 99 : i; };
+        this.regions = [...this.regionsByVolume].sort((a, b) => order(a.name) - order(b.name));
     }
     static fromReviews(reviews) {
         const { rows, statusDefs } = Aggregator.fromReviews(reviews);
@@ -451,20 +490,27 @@ class MarketTable {
             .map(r => ({ ...r, share: this.total ? r.count / this.total * 100 : 0 }))
             .sort((a, b) => (b.count - a.count) || (a.order - b.order));
         this.activeLangs = this.langs.filter(l => l.count > 0);
-        const regionMap = new Map();
-        this.langs.forEach(l => {
-            if (!l.region)
-                return;
-            if (!regionMap.has(l.region))
-                regionMap.set(l.region, { name: l.region, count: 0, languages: [], order: regionMap.size });
-            const g = regionMap.get(l.region);
-            g.count += l.count;
-            g.languages.push(l);
-        });
-        this.regions = [...regionMap.values()]
-            .map(g => ({ ...g, share: this.total ? g.count / this.total * 100 : 0, activeLanguages: g.languages.filter(l => l.count > 0).length }))
-            .sort((a, b) => (b.count - a.count) || (a.order - b.order));
+        const group = key => {
+            const map = new Map();
+            this.langs.forEach(l => {
+                const name = key(l);
+                if (!name)
+                    return;
+                if (!map.has(name))
+                    map.set(name, { name, count: 0, languages: [], order: map.size });
+                const g = map.get(name);
+                g.count += l.count;
+                g.languages.push(l);
+            });
+            return [...map.values()]
+                .map(g => ({ ...g, share: this.total ? g.count / this.total * 100 : 0, activeLanguages: g.languages.filter(l => l.count > 0).length }))
+                .sort((a, b) => (b.count - a.count) || (a.order - b.order));
+        };
+        // Charts use the standard market regions, placed by language (Config.languageRegions).
+        this.regions = group(l => Regions.fromLanguage(l.language) || Regions.UNASSIGNED).filter(r => r.count > 0);
         this.hasRegions = this.regions.length >= 2;
+        // The pasted Region column, if any, is kept only to check the source's own subtotals.
+        this.sourceRegions = group(l => l.region);
     }
     static from(parsed) {
         if (!parsed || !parsed.rows || !parsed.rows.length)
@@ -498,9 +544,9 @@ class MarketTable {
         const notes = [];
         if (this.declaredTotal && this.declaredTotal !== this.total)
             notes.push(`Reconciliation: the language rows sum to ${Fmt.int(this.total)}, while the source's total row says ${Fmt.int(this.declaredTotal)}. This report uses the row sums throughout.`);
-        if (this.hasRegions && this.regionSummary.length) {
+        if (this.sourceRegions.length && this.regionSummary.length) {
             const off = this.regionSummary.filter(s => {
-                const r = this.regions.find(x => Text.key(x.name) === Text.key(s.region));
+                const r = this.sourceRegions.find(x => Text.key(x.name) === Text.key(s.region));
                 return r && r.count !== s.count;
             });
             if (off.length)
@@ -512,7 +558,7 @@ class MarketTable {
     describe() {
         const bits = [`${Fmt.int(this.total)} reviews in ${Words.count(this.activeLangs.length, 'language')}`];
         if (this.hasRegions)
-            bits.push(`${Words.count(this.regions.length, 'region')}`);
+            bits.push(`placed into ${Words.count(this.regions.length, 'market region')}`);
         if (this.hasSupport)
             bits.push(`supported flag for ${this.langs.filter(l => l.supported !== null).length} rows`);
         const meta = ['game', 'appId', 'fetched', 'source'].filter(k => this.meta[k]);
@@ -777,81 +823,26 @@ class PriceTable {
         return 'Read ' + bits.join('; ') + '.';
     }
 }
-/**
- * Puts a language into a region group. Uses the Step 03 table's own Region column when it
- * has one, otherwise Config.regionGroups. Bare names ("Portuguese") are resolved with the
- * reviewer's country ("Brazil" -> the Brazilian variant's region).
- */
-class RegionGrouper {
-    static HINTS = [
-        [/brazil|latin|latam|mexic|argentin|chile|colomb|peru|venez|uruguay|ecuador|bolivia|paraguay/i, /brazil|latin|latam|mexic/i],
-        [/portugal|spain|espa|europe/i, /portugal|spain|europe|\(spain\)/i],
-        [/taiwan|hong ?kong|\bhk\b|macau/i, /trad|taiwan|hong/i],
-        [/china|mainland/i, /simpl/i],
-    ];
-    static stem(lang) { return Text.normalize(lang).replace(/\(.*?\)/g, '').replace(/\b(simplified|traditional|brazilian|european|latin american|latam)\b/g, '').replace(/\s+/g, ' ').trim(); }
-    constructor(market) {
-        this.exact = new Map();
-        this.stems = new Map();
-        const add = (lang, group, weight) => {
-            const k = Text.normalize(lang);
-            if (!this.exact.has(k))
-                this.exact.set(k, group);
-            const st = RegionGrouper.stem(lang);
-            if (!this.stems.has(st))
-                this.stems.set(st, []);
-            this.stems.get(st).push({ lang: k, group, weight });
-        };
-        if (market && market.hasRegions) {
-            this.source = 'table';
-            market.langs.forEach(l => add(l.language, l.region, l.count));
-            this.order = market.regions.map(r => r.name);
+/** Places reviews and languages into the standard market regions (Config.marketRegions). */
+class Regions {
+    static UNASSIGNED = 'Unassigned';
+    static names() { return Config.marketRegions.map(r => r.name); }
+    /** "Taiwan / HK" -> East Asia, "CIS" -> Russia & CIS. '' when the text names no known country ("Global"). */
+    static fromCountry(text) {
+        const parts = Text.normalize(text).split(/\s*(?:\/|,|;|\+|\band\b)\s*/).map(p => p.replace(/[().]/g, '').trim()).filter(Boolean);
+        for (const p of [Text.normalize(text).replace(/[().]/g, ''), ...parts]) {
+            const hit = Config.marketRegions.find(r => r.countries.includes(p));
+            if (hit)
+                return hit.name;
         }
-        else {
-            this.source = 'default';
-            Config.regionGroups.forEach(([group, langs]) => langs.forEach(l => add(l, group, 0)));
-            this.order = Config.regionGroups.map(([g]) => g);
-        }
+        return '';
     }
-    group(language, country = '') {
-        const k = Text.normalize(language);
-        const bare = k === RegionGrouper.stem(language); // no variant given, e.g. "portuguese"
-        const cands = this.stems.get(RegionGrouper.stem(language)) || [];
-        const groups = [...new Set(cands.map(c => c.group))];
-        if (this.exact.has(k) && (!bare || groups.length <= 1))
-            return this.exact.get(k);
-        if (groups.length <= 1)
-            return groups[0] || '';
-        for (const [countryRe, variantRe] of RegionGrouper.HINTS) {
-            if (countryRe.test(country)) {
-                const hit = cands.find(c => variantRe.test(c.lang));
-                if (hit)
-                    return hit.group;
-            }
-        }
-        return this.exact.get(k) || cands.slice().sort((a, b) => b.weight - a.weight)[0].group;
+    static fromLanguage(language) {
+        const hit = Config.languageRegions.find(r => r.test.test(String(language || '')));
+        return hit ? hit.region : '';
     }
-    /** Sentiment rows (region = reviewer country, language) -> region groups with status counts. */
-    tally(rows, defs) {
-        const map = new Map();
-        rows.forEach(row => {
-            const g = this.group(row.language, row.region) || 'Other languages';
-            if (!map.has(g))
-                map.set(g, { name: g, total: 0, counts: {}, languages: new Set() });
-            const e = map.get(g);
-            defs.forEach(s => {
-                const v = Text.num(row.counts[s.key]);
-                e.counts[s.key] = (e.counts[s.key] || 0) + v;
-                e.total += v;
-            });
-            e.languages.add(row.language);
-        });
-        return [...map.values()].filter(e => e.total > 0).sort((a, b) => b.total - a.total);
-    }
-    /** Fixed colour per group: its rank in this.order (so both region charts agree), top 5 only. */
-    colour(name) {
-        const i = this.order.indexOf(name);
-        return i >= 0 && i < Config.regionSlices ? `s${i + 1}` : 's-other';
+    static place(language, country = '') {
+        return Regions.fromCountry(country) || Regions.fromLanguage(language) || Regions.UNASSIGNED;
     }
 }
 /** Everything a section needs, in one object. */
@@ -1364,13 +1355,13 @@ class VoiceSentimentSection extends Section {
     kpiTiles() {
         const { analysis, market } = this.ctx;
         const neg = analysis.totals.negative || 0;
-        const regions = analysis.regions.filter(r => r.name !== 'Unspecified').length;
+        const regions = analysis.regions.filter(r => r.name !== Regions.UNASSIGNED).length;
         return Ui.kpis([
             analysis.total ? { value: Fmt.int(analysis.total), label: 'Tagged reviews' } : null,
             analysis.languages.length ? { value: Fmt.int(analysis.languages.length), label: 'Review languages' } : null,
             neg && analysis.total ? { value: Fmt.pct(neg / analysis.total * 100), label: 'Negative share' } : null,
             market ? { value: Fmt.int(market.total), label: 'All reviews in scope' }
-                : regions > 1 ? { value: Fmt.int(regions), label: 'Regions' } : null,
+                : regions > 1 ? { value: Fmt.int(regions), label: 'Market regions' } : null,
         ]);
     }
     regionBlock() {
@@ -1385,33 +1376,42 @@ class VoiceSentimentSection extends Section {
       </div>`).join('');
         return Ui.block(Ui.blockHead('Where tagged feedback is concentrated (top 5 regions)') + `<div class="ranking">${rows}</div>`);
     }
-    /** Every tagged review grouped into the Step 03 regions (or the default groups), as a donut + list. */
+    /**
+     * Player sentiment reviews only (the workbook), by standard market region: a donut of where
+     * they come from, then the sentiment breakdown per region. Independent of Step 03.
+     */
     regionPie() {
-        const { analysis, market, statusDefs } = this.ctx;
-        const grouper = new RegionGrouper(market);
-        const groups = grouper.tally(analysis.rows, statusDefs);
+        const { analysis, statusDefs } = this.ctx;
+        const groups = analysis.regionsByVolume.filter(g => g.total > 0);
         if (groups.length < 2)
             return '';
         const total = groups.reduce((s, g) => s + g.total, 0);
-        const own = groups.filter(g => grouper.colour(g.name) !== 's-other');
-        const rest = groups.filter(g => grouper.colour(g.name) === 's-other');
-        const slices = own.map(g => ({ name: g.name, value: g.total, cls: grouper.colour(g.name) }));
-        if (rest.length)
-            slices.push({ name: `Other (${Words.list(rest.map(g => g.name))})`, value: rest.reduce((s, g) => s + g.total, 0), cls: 's-other' });
-        const rows = groups.map(g => `
-        <div class="region-row rg ${grouper.colour(g.name)}" title="${esc(g.name)}: ${statusDefs.map(s => `${s.label} ${g.counts[s.key] || 0}`).join(', ')}">
+        const N = Config.regionSlices;
+        const cls = i => (i < N ? `s${i + 1}` : 's-other');
+        const slices = groups.slice(0, N).map((g, i) => ({ name: g.name, value: g.total, cls: cls(i) }));
+        if (groups.length > N)
+            slices.push({ name: `Other (${Words.list(groups.slice(N).map(g => g.name))})`, value: groups.slice(N).reduce((s, g) => s + g.total, 0), cls: 's-other' });
+        const legend = groups.map((g, i) => `
+        <div class="region-row ${cls(i)}" title="${esc(g.name)}: ${Fmt.int(g.total)} player sentiment reviews">
           <i class="sw"></i>
-          <span class="nm">${esc(g.name)}<small>${esc(Words.list([...g.languages]))}</small></span>
-          ${Ui.miniSentiment(g.counts, statusDefs)}
+          <span class="nm">${esc(g.name)}<small>${esc(Words.list(g.rows.map(r => r.language)))}</small></span>
           <span class="ct">${Fmt.int(g.total)}</span>
           <span class="sh">${Fmt.share(g.total / total * 100)}</span>
         </div>`).join('');
-        const list = `<div class="region-list"><div class="region-head rg"><span></span><span>Region</span><span>Sentiment</span><span>Reviews</span><span>Share</span></div>${rows}</div>`;
-        const kicker = grouper.source === 'table' ? 'Regions as in the Step 03 review table' : 'Standard region groups (paste a Step 03 table to use your own)';
-        return Ui.block(Ui.blockHead('All tagged reviews by region', kicker)
-            + `<div class="region-chart">${Ui.donut(slices, { total, label: 'Tagged', title: 'Tagged reviews by region' })}${list}</div>`
-            + Ui.legend(statusDefs))
-            + Ui.note('Reviews are placed by review language, so English counts as English (global) wherever the reviewer lives. Portuguese, Spanish and Chinese without a stated variant are placed using the reviewer\'s country.');
+        const list = `<div class="region-list"><div class="region-head"><span></span><span>Region</span><span>Reviews</span><span>Share</span></div>${legend}</div>`;
+        const neg = statusDefs.find(s => s.key === 'negative');
+        const body = groups.map(g => `
+        <tr title="${esc(g.name)}: ${statusDefs.map(s => `${s.label} ${Fmt.int(g.counts[s.key] || 0)}`).join(', ')}">
+          <td class="rs-name">${esc(g.name)}</td>
+          <td class="rs-bar">${Ui.miniSentiment(g.counts, statusDefs)}</td>
+          ${statusDefs.map(s => { const v = Text.num(g.counts[s.key]); return `<td class="num"><span class="cell-count tone-${s.tone}${v ? '' : ' zero'}">${Fmt.int(v)}</span></td>`; }).join('')}
+          ${neg ? `<td class="num rs-neg">${Fmt.pct((g.counts.negative || 0) / g.total * 100)}</td>` : ''}
+        </tr>`).join('');
+        const head = Ui.th('Region') + Ui.th('Sentiment split') + statusDefs.map(s => Ui.th(s.label, { num: true })).join('') + (neg ? Ui.th('Negative share', { num: true }) : '');
+        return Ui.block(
+            Ui.blockHead('Player sentiment reviews by region', `All ${Fmt.int(total)} player sentiment reviews from the workbook, by market region, with the sentiment breakdown for each region.`)
+            + `<div class="region-chart">${Ui.donut(slices, { total, label: 'Sentiment reviews', title: 'Player sentiment reviews by region' })}${list}</div>`
+            + `<div class="block-sub">${Ui.blockHead('Sentiment breakdown by region')}${Ui.legend(statusDefs)}${Ui.table(head, body, 'region-sentiment')}</div>`);
     }
     renderBody() {
         const { analysis, statusDefs } = this.ctx;
@@ -1666,11 +1666,11 @@ class BreakdownSection extends Section {
         const body = this.ctx.analysis.regions.map(region => region.rows.map((row, i) => `
       <tr class="${i === 0 ? 'region-start' : ''}">
         <td class="region">${i === 0 ? esc(row.region) : ''}</td>
-        <td class="lang">${esc(row.language)}</td>
+        <td class="lang">${esc(row.language)}${row.countries.size ? `<small>${esc([...row.countries].join(', '))}</small>` : ''}</td>
         ${defs.map(s => { const v = Text.num(row.counts[s.key]); return `<td class="num"><span class="cell-count tone-${s.tone}${v ? '' : ' zero'}">${Fmt.int(v)}</span></td>`; }).join('')}
         <td class="num row-total">${Fmt.int(row.total)}</td>
       </tr>`).join('')).join('');
-        const head = Ui.th('Region') + Ui.th('Review language') + defs.map(s => Ui.th(s.label, { num: true })).join('') + Ui.th('Total', { num: true });
+        const head = Ui.th('Market region') + Ui.th('Review language and reviewer country') + defs.map(s => Ui.th(s.label, { num: true })).join('') + Ui.th('Total', { num: true });
         return Ui.block(Ui.table(head, body, 'breakdown'), { splittable: true });
     }
 }
@@ -1956,7 +1956,7 @@ class KeyFindingsSection extends Section {
 }
 // ------------------------------------------------------------
 // 6. Where reviews come from: region donut + ranked list.
-//    Reads only the Step 3 all-review table (needs a Region column).
+//    Reads only the Step 3 all-review table, placed by language into Config.marketRegions.
 // ------------------------------------------------------------
 class RegionSection extends Section {
     get eyebrow() { return 'Where reviews come from'; }
@@ -1964,7 +1964,7 @@ class RegionSection extends Section {
     get howToRead() {
         const m = this.ctx.market;
         const shown = Math.min(Config.regionSlices, m.regions.length);
-        return `All ${Fmt.int(m.total)} reviews in scope, grouped into ${Words.count(m.regions.length, 'region')}. The chart shows the ${Words.NUMBERS[shown] || shown} largest${m.regions.length > shown ? ' and folds the rest into Other' : ''}; the list gives every region.`;
+        return `All ${Fmt.int(m.total)} reviews in scope, by review language, grouped into ${Words.count(m.regions.length, 'market region')}. The chart shows the ${Words.NUMBERS[shown] || shown} largest${m.regions.length > shown ? ' and folds the rest into Other' : ''}; the list gives every region.`;
     }
     isAvailable() { return !!(this.ctx.market && this.ctx.market.hasRegions); }
     renderBody() {
@@ -1979,7 +1979,7 @@ class RegionSection extends Section {
         const kpis = Ui.kpis([
             { value: Fmt.int(m.total), label: 'All reviews' },
             { value: Fmt.int(m.activeLangs.length), label: 'Review languages' },
-            { value: Fmt.int(m.regions.length), label: 'Regions' },
+            { value: Fmt.int(m.regions.length), label: 'Market regions' },
             supportedShare !== null ? { value: Fmt.pct(supportedShare), label: 'In supported languages' } : null,
         ]);
         const rows = m.regions.map((r, i) => `
@@ -2213,7 +2213,7 @@ class MethodSection extends Section {
         return Ui.cards([
             { title: 'What was measured', body: measured },
             { title: 'Why reviews are a proxy, not a census', body: 'Reviewers are a self-selected slice of buyers, and the habit of writing reviews differs from market to market. Read shares as a relative signal between languages, not as country sales.' },
-            { title: 'A language is not a country', body: 'The review language shows how a player chose to write, not where they live. Regions in this report group languages for readability and only approximate markets.' },
+            { title: 'How regions are defined', body: [`Every region chart uses the same ${Regions.names().length} market regions: ${Words.list(Regions.names())}.`, 'Player sentiment reviews are placed by the reviewer country given in the workbook, or by review language when there is none. The all-review table is placed by review language, with English counted under North America, so treat regions there as an approximation of markets.'] },
             { title: 'What the counts do not show', body: limits },
         ], 2);
     }
