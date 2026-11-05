@@ -1088,12 +1088,6 @@ input[type="file"]{ display:none; }
   text-wrap:balance;
   overflow-wrap:break-word;
 }
-.cover-subtitle{
-  margin-top:16px;
-  font-size:19px;
-  line-height:1.5;
-  color:var(--text-dim);
-}
 .publisher-line{
   margin-top:16px;
   max-width:100%;

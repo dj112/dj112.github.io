@@ -53,7 +53,7 @@
         <div class="step-label">Step 02</div>
         <h2>Review auto-filled report details</h2>
       </div>
-      <p class="hint">Title, platform, publisher/studio and counts are filled only when the workbook exposes them. Publisher and both fetch-window dates are required; pick the dates from the calendar. "To" always starts as today.</p>
+      <p class="hint">Title, platform, counts and the fetch window start are read from the workbook. Publisher comes from the workbook when present, otherwise from the built-in list or from what you entered last time for the same game. Publisher and both fetch-window dates are required. "To" always starts as today.</p>
     </div>
 
     <div class="field-grid">
@@ -70,14 +70,6 @@
         <input id="f-platform" placeholder="Steam, App Store or Google Play">
       </div>
       <div class="field">
-        <label for="f-preparedFor">Prepared for</label>
-        <input id="f-preparedFor" placeholder="Client / recipient">
-      </div>
-      <div class="field span2">
-        <label for="f-subtitle">Cover subtitle (optional)</label>
-        <input id="f-subtitle" placeholder="Leave blank to omit, e.g. Localization review analysis">
-      </div>
-      <div class="field span2">
         <label for="f-productFilter">Product scope</label>
         <select id="f-productFilter" disabled>
           <option value="">All products</option>

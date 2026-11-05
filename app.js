@@ -56,6 +56,12 @@ const Config = Object.freeze({
     findingsCount: 6,
     // A supported language under this review share is called out as "quiet".
     quietShare: 0.5,
+    // Publisher fallback when the workbook has none. Key by Steam app ID (from the review
+    // links) or by game title in lower case. Whatever you type in the Publisher field is
+    // also remembered in this browser for the next report on the same game.
+    knownPublishers: Object.freeze({
+        '1374490': 'Jagex', // RuneScape: Dragonwilds
+    }),
     statusOrder: ['negative', 'request', 'positive'],
     statusLabels: { negative: 'Negative', request: 'Request', positive: 'Positive' },
     statusSynonyms: {
@@ -646,7 +652,7 @@ class WorkbookParser {
         'publisher': 'publisher', 'developer': 'publisher', 'studio': 'publisher', 'publisher / studio': 'publisher',
         'publisher/studio': 'publisher', 'publisher name': 'publisher', 'published by': 'publisher', 'developer name': 'publisher', 'company': 'publisher',
         'platform': 'platform', 'source': 'platform', 'store': 'platform',
-        'prepared for': 'preparedFor', 'client': 'preparedFor',
+        'app id': 'steamAppId', 'appid': 'steamAppId', 'steam app id': 'steamAppId',
         'period from': 'periodFrom', 'date from': 'periodFrom', 'fetch window from': 'periodFrom', 'reviews fetched from': 'periodFrom', 'fetch from': 'periodFrom',
         'period to': 'periodTo', 'date to': 'periodTo', 'fetch window to': 'periodTo', 'reviews fetched to': 'periodTo', 'fetch to': 'periodTo',
     };
@@ -816,7 +822,8 @@ class WorkbookParser {
             gameTitle,
             publisher: Lists.mode(reviews.map(r => r.publisher)) || labels.publisher || '',
             platform: Lists.mode(reviews.map(r => r.platform)) || labels.platform || this.inferPlatform(reviewSheets) || fromName.platform || '',
-            preparedFor: labels.preparedFor || '',
+            // Steam app ID: an "App ID" cell, else the ID inside the review links.
+            steamAppId: Text.digits(labels.steamAppId) || Lists.mode(reviews.map(r => WorkbookParser.steamAppId(r.link))),
             // Fetch window only, never the first/last review date.
             periodFrom: window.from || Dates.toIso(labels.periodFrom) || labels.periodFrom || '',
             periodTo: window.to || Dates.toIso(labels.periodTo) || labels.periodTo || '',
@@ -826,10 +833,15 @@ class WorkbookParser {
             usefulCount: stats.usefulCount || (reviews.length || null),
         };
     }
+    /** "1374490" from store.steampowered.com/app/1374490/... or .../recommended/1374490/. */
+    static steamAppId(link) {
+        const m = String(link || '').match(/steam(?:powered|community)\.com\/(?:.*?\/)?(?:app|recommended)\/(\d+)/i);
+        return m ? m[1] : '';
+    }
     scanLabelValues() {
         const result = {};
         const map = WorkbookParser.LABEL_MAP;
-        const inline = /^\s*(game(?: title)?|product|project(?: title)?|publisher(?: name)?|publisher\s*\/\s*studio|published by|developer(?: name)?|studio|company|platform|source|store|prepared for|client)\s*:\s*(.+)$/i;
+        const inline = /^\s*(game(?: title)?|product|project(?: title)?|publisher(?: name)?|publisher\s*\/\s*studio|published by|developer(?: name)?|studio|company|platform|source|store|app ?id|steam app id)\s*:\s*(.+)$/i;
         this.forEachCell((cell, row, c) => {
             const text = String(cell ?? '').trim();
             const key = map[Text.normalize(text.replace(/:$/, ''))];
@@ -908,7 +920,8 @@ class WorkbookParser {
         };
         const rangeInCell = v => (typeof v === 'string' ? rangeIn(v) : null);
         // Strong labels first, so a generic "period" cell never beats an explicit "fetch window".
-        const passes = [/fetch|collected|collection|scrap|window/i, /period|review dates?|date range|covers?\b/i];
+        // Last pass catches sentences such as "The report is based on reviews from 2025-10-07 to 2026-10-07."
+        const passes = [/fetch|collected|collection|scrap|window/i, /period|review dates?|date range|covers?\b/i, /based on|\bfrom\b|\bbetween\b|\bsince\b/i];
         for (const label of passes) {
             for (const { grid } of this.sheets) {
                 for (let r = 0; r < grid.length; r++) {
@@ -1678,8 +1691,8 @@ class CoverPage {
         return bits.length ? bits.join(', ') + '.' : 'Counts and sentiment breakdowns in this report are derived directly from the uploaded workbook.';
     }
     get metaItems() {
-        const { platform, preparedFor } = this.meta;
-        return [platform ? ['Source', platform] : null, preparedFor ? ['Prepared for', preparedFor] : null].filter(Boolean);
+        const { platform } = this.meta;
+        return [platform ? ['Source', platform] : null].filter(Boolean);
     }
     /** Four outlined symbols: double circle, rounded triangle, rounded plus, rounded square. */
     static glyphs() {
@@ -1713,9 +1726,7 @@ class CoverPage {
         ${brandStrip}
         <div class="cover-title-block">
           <div class="eyebrow">${esc(this.eyebrow)}</div>
-          <h1 class="report-title">${esc(meta.gameTitle)}</h1>
-          ${meta.subtitle ? `<div class="cover-subtitle">${esc(meta.subtitle)}</div>` : ''}
-          <div class="publisher-line">${esc(meta.publisher)}</div>
+          <h1 class="report-title">${esc(meta.gameTitle)}</h1>          <div class="publisher-line">${esc(meta.publisher)}</div>
           <div class="rule"></div>
         </div>
         <div class="cover-foot">
@@ -1991,9 +2002,47 @@ class StatusLine {
         this.el.className = 'status-line' + (kind ? ' ' + kind : '');
     }
 }
+/**
+ * Publisher fallback when the workbook has none, all offline:
+ * 1) what was typed for this game in an earlier report (this browser only),
+ * 2) Config.knownPublishers, by Steam app ID or game title.
+ */
+class PublisherBook {
+    static KEY = 'allcorrect.publishers.v1';
+    static keys({ steamAppId, gameTitle }) {
+        return [steamAppId ? `app:${steamAppId}` : '', gameTitle ? `title:${Text.normalize(gameTitle)}` : ''].filter(Boolean);
+    }
+    static load() {
+        try {
+            return JSON.parse(localStorage.getItem(PublisherBook.KEY) || '{}') || {};
+        }
+        catch (_) {
+            return {};
+        }
+    }
+    /** { name, source } or null. */
+    static lookup(meta) {
+        const book = PublisherBook.load();
+        const remembered = PublisherBook.keys(meta).map(k => book[k]).find(Boolean);
+        if (remembered)
+            return { name: remembered, source: 'your last report for this game' };
+        const known = Config.knownPublishers[meta.steamAppId] || Config.knownPublishers[Text.normalize(meta.gameTitle)];
+        return known ? { name: known, source: 'the built-in publisher list' } : null;
+    }
+    static remember(meta, name) {
+        if (!String(name || '').trim())
+            return;
+        try {
+            const book = PublisherBook.load();
+            PublisherBook.keys(meta).forEach(k => { book[k] = String(name).trim(); });
+            localStorage.setItem(PublisherBook.KEY, JSON.stringify(book));
+        }
+        catch (_) { }
+    }
+}
 class ReportForm {
     static FIELD_IDS = [
-        'gameTitle', 'publisher', 'platform', 'preparedFor', 'subtitle', 'productFilter',
+        'gameTitle', 'publisher', 'platform', 'productFilter',
         'periodFrom', 'periodTo', 'fetched', 'analysed', 'marketTable', 'marketScope',
     ];
     constructor(doc = document) {
@@ -2037,8 +2086,6 @@ class ReportForm {
         f.gameTitle.value = meta.gameTitle || '';
         f.publisher.value = meta.publisher || '';
         f.platform.value = meta.platform || '';
-        f.preparedFor.value = meta.preparedFor || '';
-        f.subtitle.value = '';
         f.periodFrom.value = Dates.toIso(meta.periodFrom);
         f.periodTo.value = Dates.todayISO();
         f.fetched.value = meta.fetched || '';
@@ -2072,8 +2119,6 @@ class ReportForm {
                 gameTitle: f.gameTitle.value || market.meta.game || 'Untitled Project',
                 publisher: f.publisher.value.trim(),
                 platform: f.platform.value || '',
-                preparedFor: f.preparedFor.value || '',
-                subtitle: f.subtitle.value.trim(),
                 periodFrom: f.periodFrom.value.trim(),
                 periodTo: f.periodTo.value.trim(),
                 fetched: f.fetched.value || '',
@@ -2158,15 +2203,24 @@ class App {
         const notes = [];
         if (explicit && explicit !== analysis.total)
             notes.push(`Note: workbook says ${Fmt.int(explicit)} useful reviews while the parsed tagged total is ${Fmt.int(analysis.total)}; source values were left unchanged.`);
-        if (!dataset.metadata.publisher)
-            notes.push('Publisher was not found in the workbook; please fill the required Publisher / studio field.');
+        const info = [];
+        if (!dataset.metadata.publisher) {
+            const found = PublisherBook.lookup(dataset.metadata);
+            if (found) {
+                this.form.fields.publisher.value = found.name;
+                info.push(`Publisher "${found.name}" filled from ${found.source}; change it if needed.`);
+            }
+            else {
+                notes.push('Publisher was not found in the workbook; please fill the required Publisher / studio field. It will be remembered for this game next time.');
+            }
+        }
         if (!this.form.fields.periodFrom.value)
             notes.push('Fetch window from was not found in the workbook; pick it from the calendar (required).');
         const plural = (n, word) => `${Fmt.int(n)} ${word}${n === 1 ? '' : 's'}`;
         this.status.set([`Parsed ${plural(dataset.sheetCount, 'sheet')}.`,
             `${plural(analysis.total, 'player-sentiment review')} represented;`,
             `${plural(dataset.reviews.length, 'individual review')} available for the reviews section.`,
-            ...notes].join(' '), notes.length ? 'warn' : 'ok');
+            ...info, ...notes].join(' '), notes.length ? 'warn' : 'ok');
         this.generateBtn.disabled = false;
     }
     generate() {
@@ -2180,6 +2234,7 @@ class App {
             return;
         }
         const input = this.form.values();
+        PublisherBook.remember({ steamAppId: this.dataset.metadata.steamAppId, gameTitle: input.meta.gameTitle }, input.meta.publisher);
         let reviews = this.dataset.reviews;
         let analysis;
         if (input.product && reviews.length) {
