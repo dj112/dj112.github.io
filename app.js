@@ -414,21 +414,22 @@ class SentimentAnalysis {
             const language = languageMap.get(row.language);
             statusDefs.forEach(s => { language.counts[s.key] += Text.num(row.counts[s.key]); });
             language.total += rowTotal;
-            // Regions are always the standard market regions; the workbook's own region
-            // (usually a country) only decides which one.
+            // Regions are always the standard market regions, decided by the review language.
+            // The workbook's own region (usually a country) only picks the language variant.
             const name = Regions.place(row.language, row.region);
+            const label = Regions.variant(row.language, row.region);
             if (!regionMap.has(name)) {
                 const counts = {};
                 statusDefs.forEach(s => { counts[s.key] = 0; });
                 regionMap.set(name, { name, rowMap: new Map(), counts, total: 0, firstIndex: index });
             }
             const region = regionMap.get(name);
-            if (!region.rowMap.has(row.language)) {
+            if (!region.rowMap.has(label)) {
                 const counts = {};
                 statusDefs.forEach(s => { counts[s.key] = 0; });
-                region.rowMap.set(row.language, { region: name, language: row.language, countries: new Set(), counts, total: 0 });
+                region.rowMap.set(label, { region: name, language: label, countries: new Set(), counts, total: 0 });
             }
-            const lr = region.rowMap.get(row.language);
+            const lr = region.rowMap.get(label);
             if (row.region && row.region !== 'Unspecified')
                 lr.countries.add(row.region);
             statusDefs.forEach(s => {
@@ -843,8 +844,28 @@ class Regions {
         const hit = Config.languageRegions.find(r => r.test.test(String(language || '')));
         return hit ? hit.region : '';
     }
+    /**
+     * Bare language names that span regions get their regional variant from the reviewer's
+     * country: "Portuguese" from Brazil -> "Portuguese (Brazil)", from Portugal -> "Portuguese (Portugal)".
+     * Names that already carry a variant are returned unchanged.
+     */
+    static variant(language, country = '') {
+        const lang = String(language || '').trim();
+        if (/\(|simplified|traditional|brazil|latin|european/i.test(lang))
+            return lang;
+        const where = Regions.fromCountry(country);
+        const c = Text.normalize(country);
+        if (/^portuguese$/i.test(lang))
+            return where === 'Western Europe' ? 'Portuguese (Portugal)' : 'Portuguese (Brazil)';
+        if (/^spanish$/i.test(lang))
+            return where === 'Latin America' ? 'Spanish (Latin America)' : 'Spanish (Spain)';
+        if (/^chinese$/i.test(lang))
+            return /taiwan|hong ?kong|\bhk\b|macau/.test(c) ? 'Chinese (Traditional)' : 'Chinese (Simplified)';
+        return lang;
+    }
+    /** Region = home region of the language variant, so every language sits in exactly one region. Country only as a last resort. */
     static place(language, country = '') {
-        return Regions.fromCountry(country) || Regions.fromLanguage(language) || Regions.UNASSIGNED;
+        return Regions.fromLanguage(Regions.variant(language, country)) || Regions.fromCountry(country) || Regions.UNASSIGNED;
     }
 }
 /** Everything a section needs, in one object. */
@@ -1280,7 +1301,7 @@ class Ui {
         let a0 = -Math.PI / 2;
         const segs = slices.filter(s => s.value > 0).map(s => {
             const frac = s.value / sum;
-            const tip = `<title>${esc(s.name)}: ${Fmt.int(s.value)} (${Fmt.share(frac * 100)})</title>`;
+            const tip = '';
             if (frac >= 0.9999) {
                 return `<path class="donut-seg ${s.cls}" fill-rule="evenodd" d="M ${C - R} ${C} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0 Z M ${C - r} ${C} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z">${tip}</path>`;
             }
@@ -2203,7 +2224,7 @@ class MethodSection extends Section {
         return Ui.cards([
             { title: 'What was measured', body: measured },
             { title: 'Why reviews are a proxy, not a census', body: 'Reviewers are a self-selected slice of buyers, and the habit of writing reviews differs from market to market. Read shares as a relative signal between languages, not as country sales.' },
-            { title: 'How regions are defined', body: [`Every region chart uses the same ${Regions.names().length} market regions: ${Words.list(Regions.names())}.`, 'Player sentiment reviews are placed by the reviewer country given in the workbook, or by review language when there is none. English with no reviewer country goes to Global (English). The all-review table is placed by review language, so treat regions there as an approximation of markets.'] },
+            { title: 'How regions are defined', body: [`Every region chart uses the same ${Regions.names().length} market regions: ${Words.list(Regions.names())}.`, 'Reviews are placed by review language, so each language sits in exactly one region and English always counts as Global (English). Portuguese, Spanish and Chinese are split into their regional variants using the reviewer country, for example Portuguese from Brazil counts as Portuguese (Brazil) in Latin America. Regions approximate markets: a review language is not proof of where the player lives.'] },
             { title: 'What the counts do not show', body: limits },
         ], 2);
     }
