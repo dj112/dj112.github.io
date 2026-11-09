@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261106">
+  <link rel="stylesheet" href="styles.css?v=20261109d">
 </head>
 <body>
 
@@ -23,6 +23,13 @@
         <select id="printMode">
           <option value="report">Report only</option>
           <option value="report-reviews">Report + reviews</option>
+        </select>
+      </label>
+      <label class="print-control" for="printTheme">
+        <span>PDF theme</span>
+        <select id="printTheme">
+          <option value="dark">Dark</option>
+          <option value="light">Light (saves ink)</option>
         </select>
       </label>
       <button id="saveHtmlBtn" disabled title="Download the report as one self-contained HTML file">Save HTML</button>
@@ -70,9 +77,9 @@
         <input id="f-platform" placeholder="Steam, App Store or Google Play">
       </div>
       <div class="field">
-        <label for="f-productFilter">Product scope</label>
+        <label for="f-productFilter">Title scope</label>
         <select id="f-productFilter" disabled>
-          <option value="">All products</option>
+          <option value="">All titles</option>
         </select>
       </div>
       <div class="field">
@@ -108,7 +115,7 @@
         <div class="field-note" id="marketNote" aria-live="polite"></div>
       </div>
       <div class="field span2">
-        <label for="f-marketScope">Table scope (product + period)</label>
+        <label for="f-marketScope">Table scope (title + period)</label>
         <input id="f-marketScope" placeholder="Optional. Built from Game / App ID / Fetched lines when left blank">
       </div>
     </div>
@@ -138,6 +145,6 @@
   <div id="report"></div>
 </div>
 
-  <script src="app.js?v=20261106"></script>
+  <script src="app.js?v=20261109d"></script>
 </body>
 </html>

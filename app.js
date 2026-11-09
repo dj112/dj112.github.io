@@ -47,8 +47,10 @@ const Config = Object.freeze({
     ]),
     // Region donut: largest N regions get their own slice, the rest fold into "Other".
     regionSlices: 5,
+    // A pie slice at least this big gets its percentage printed on it (fraction of the whole).
+    pieLabelMin: 0.08,
     // Most generated takeaways shown in the "What the data says" section.
-    findingsCount: 6,
+    findingsCount: 4,
     // A supported language under this review share is called out as "quiet".
     quietShare: 0.5,
     // Publisher fallback when the workbook has none. Key by Steam app ID (from the review
@@ -210,6 +212,14 @@ class Text {
         const t = String(s || '').replace(/\s+/g, ' ').trim();
         return t.length <= max ? t : t.slice(0, max).replace(/\s+\S*$/, '') + '...';
     }
+    /** Like clip(), but wide scripts (Chinese, Japanese, Korean) count double, so cards come out a similar height. */
+    static clipVisual(s, max) {
+        const t = String(s || '').replace(/\s+/g, ' ').trim();
+        let width = 0, i = 0;
+        for (; i < t.length && width < max; i++)
+            width += /[\u1100-\u11ff\u2e80-\ua4cf\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/.test(t[i]) ? 2 : 1;
+        return i >= t.length ? t : t.slice(0, i).replace(/\s+\S*$/, '') + '...';
+    }
     /** Whole review count from a pasted cell: "1375", "1,375", "1 375", "1.375" -> 1375. NaN if not a number. */
     static count(v) {
         if (typeof v === 'number')
@@ -225,10 +235,9 @@ class Fmt {
         const n = Number(v);
         return Number.isFinite(n) ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n) : String(v ?? '');
     }
-    /** "42.3%" (two decimals under 1%). */
-    static share(v) { return (v > 0 && v < 1 ? v.toFixed(2) : v.toFixed(1)) + '%'; }
-    /** "42.3%" always one decimal, for headlines. */
-    static pct(v) { return (Number(v) || 0).toFixed(1) + '%'; }
+    /** One percentage format everywhere: "42.3%", and "<0.1%" for tiny non-zero shares. */
+    static share(v) { const n = Number(v) || 0; return n > 0 && n < 0.05 ? '<0.1%' : n.toFixed(1) + '%'; }
+    static pct(v) { return Fmt.share(v); }
     static dateRange(from, to) { return [from, to].filter(Boolean).join(' to '); }
 }
 /** Plain-English helpers for generated sentences. */
@@ -885,7 +894,7 @@ class ReportContext {
     warnings() {
         const out = [];
         if (this.market && !this.marketScope)
-            out.push('The all-review table has no scope label; say which product(s) and period it covers.');
+            out.push('The all-review table has no scope label; say which title(s) and period it covers.');
         return out;
     }
 }
@@ -1090,6 +1099,7 @@ class WorkbookParser {
             fetched: stats.fetched || '',
             analysed: stats.analysed || '',
             usefulCount: stats.usefulCount || (reviews.length || null),
+            statsByTitle: this.scanStatsByTitle(distinctProducts),
         };
     }
     /** "1374490" from store.steampowered.com/app/1374490/... or .../recommended/1374490/. */
@@ -1117,6 +1127,25 @@ class WorkbookParser {
             }
         });
         return result;
+    }
+    /** Per-title "Fetched / Analysed" lines: the first such line within five rows below a cell holding the title. */
+    scanStatsByTitle(titles) {
+        const out = {};
+        const names = new Map(titles.map(t => [Text.normalize(t), t]));
+        this.sheets.forEach(({ grid }) => grid.forEach((row, r) => row.forEach((cell, c) => {
+            const title = typeof cell === 'string' ? names.get(Text.normalize(cell)) : null;
+            if (!title || out[title])
+                return;
+            for (let i = r + 1; i <= r + 5 && i < grid.length; i++) {
+                const text = String((grid[i] || [])[c] ?? '');
+                const f = text.match(/\bFetched\s*:\s*([\d\s,.]+)/i), a = text.match(/\bAnaly[sz]ed\s*:\s*([\d\s,.]+)/i);
+                if (f || a) {
+                    out[title] = { fetched: f ? Text.digits(f[1]) : '', analysed: a ? Text.digits(a[1]) : '' };
+                    return;
+                }
+            }
+        })));
+        return out;
     }
     scanStats() {
         const out = {};
@@ -1220,6 +1249,10 @@ class Ui {
     static blockHead(label, kicker = '') {
         return `<div class="block-head"><div class="block-label">${esc(label)}</div>${kicker ? `<div class="block-kicker">${esc(kicker)}</div>` : ''}</div>`;
     }
+    /** Chart heading written as a finding, with an optional plain description under it. */
+    static chartHead(sentence, kicker = '') {
+        return `<div class="block-head"><div class="block-title">${esc(sentence)}</div>${kicker ? `<div class="block-kicker">${esc(kicker)}</div>` : ''}</div>`;
+    }
     static note(text) { return text ? `<div class="scope-note">${esc(text)}</div>` : ''; }
     /** Like note(), but http(s) links become clickable so readers can open the source. */
     static sourceNote(text) {
@@ -1299,19 +1332,23 @@ class Ui {
         const sum = slices.reduce((s, x) => s + x.value, 0) || 1;
         const pt = (rad, a) => `${(C + rad * Math.cos(a)).toFixed(2)} ${(C + rad * Math.sin(a)).toFixed(2)}`;
         let a0 = -Math.PI / 2;
+        const labels = [];
         const segs = slices.filter(s => s.value > 0).map(s => {
             const frac = s.value / sum;
-            const tip = '';
             if (frac >= 0.9999) {
-                return `<path class="donut-seg ${s.cls}" fill-rule="evenodd" d="M ${C - R} ${C} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0 Z M ${C - r} ${C} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z">${tip}</path>`;
+                return `<path class="donut-seg ${s.cls}" fill-rule="evenodd" d="M ${C - R} ${C} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0 Z M ${C - r} ${C} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z"/>`;
             }
             const a1 = a0 + frac * 2 * Math.PI;
             const large = frac > 0.5 ? 1 : 0;
             const d = `M ${pt(R, a0)} A ${R} ${R} 0 ${large} 1 ${pt(R, a1)} L ${pt(r, a1)} A ${r} ${r} 0 ${large} 0 ${pt(r, a0)} Z`;
+            if (frac >= Config.pieLabelMin) {
+                const mid = (a0 + a1) / 2, rad = (R + r) / 2;
+                labels.push(`<text class="donut-pct ${s.cls}" x="${(C + rad * Math.cos(mid)).toFixed(2)}" y="${(C + rad * Math.sin(mid)).toFixed(2)}" text-anchor="middle" dominant-baseline="central">${Fmt.share(frac * 100)}</text>`);
+            }
             a0 = a1;
-            return `<path class="donut-seg ${s.cls}" d="${d}">${tip}</path>`;
+            return `<path class="donut-seg ${s.cls}" d="${d}"/>`;
         }).join('');
-        return `<svg class="donut" viewBox="0 0 ${S} ${S}" role="img" aria-label="${esc(title)}">${segs}
+        return `<svg class="donut" viewBox="0 0 ${S} ${S}" role="img" aria-label="${esc(title)}">${segs}${labels.join('')}
       <text class="donut-total" x="${C}" y="${C + 4}" text-anchor="middle">${Fmt.int(total)}</text>
       <text class="donut-label" x="${C}" y="${C + 26}" text-anchor="middle">${esc(label.toUpperCase())}</text></svg>`;
     }
@@ -1333,13 +1370,19 @@ class Section {
     constructor(ctx) {
         this.ctx = ctx;
         this.number = 0; // set by ReportBody; printed as "01 · EYEBROW"
+        this.pageBreak = false; // set by ReportBody: begin this section on a fresh printed page
     }
     // ---- Text slots (all optional; the base class returns "nothing") ----
     get eyebrow() { return ''; }
     get title() { return ''; }
     get howToRead() { return ''; }
-    /** True to begin this section on a fresh printed page. */
-    get startsNewPage() { return false; }
+    /** Letter for appendix sections ("A" prints "Appendix A · EYEBROW"); blank for the main report. */
+    get appendix() { return ''; }
+    /** False leaves the section out of the 01, 02... numbering. */
+    get numbered() { return !this.appendix; }
+    /** True to stay on the same printed page as the section before it. */
+    get keepWithPrevious() { return false; }
+    get startsNewPage() { return this.pageBreak; }
     // ---- Behaviour ----
     /** Return false to hide the whole section (e.g. missing data). */
     isAvailable() { return true; }
@@ -1348,7 +1391,7 @@ class Section {
     headHtml() {
         const parts = [];
         if (this.eyebrow) {
-            const num = this.number ? `${String(this.number).padStart(2, '0')} · ` : '';
+            const num = this.appendix ? `Appendix ${this.appendix} · ` : this.number ? `${String(this.number).padStart(2, '0')} · ` : '';
             parts.push(`<div class="eyebrow">${num}${esc(this.eyebrow)}</div>`);
         }
         if (this.title)
@@ -1366,6 +1409,32 @@ class Section {
     }
 }
 // ------------------------------------------------------------
+// Summary: the verdict and key numbers in one short paragraph.
+// ------------------------------------------------------------
+class SummarySection extends Section {
+    get eyebrow() { return 'Summary'; }
+    get numbered() { return false; }
+    get title() { return 'The report [[in brief]]'; }
+    sentences() {
+        if (this._s)
+            return this._s;
+        const { analysis: a, meta, statusDefs } = this.ctx;
+        const out = [];
+        if (a.total) {
+            const part = s => {
+                const n = a.totals[s.key] || 0;
+                return `${Fmt.int(n)} ${s.key === 'request' ? `language request${n === 1 ? '' : 's'}` : s.label.toLowerCase()}`;
+            };
+            out.push(`${meta.gameTitle} has ${Fmt.int(a.total)} localization-related player reviews in this report: ${Words.list(statusDefs.map(part))}.`);
+        }
+        [Findings.demand(this.ctx), Findings.quality(this.ctx), Findings.coverage(this.ctx), Findings.strength(this.ctx)]
+            .forEach(f => { if (f && f.lead) out.push(f.lead); });
+        return (this._s = out.slice(0, 4));
+    }
+    isAvailable() { return this.sentences().length >= 2; }
+    renderBody() { return Ui.block(`<p class="summary-text">${esc(this.sentences().join(' '))}</p>`); }
+}
+// ------------------------------------------------------------
 // 1. At a glance: KPI tiles + sentiment mix bar + top regions
 // ------------------------------------------------------------
 class VoiceSentimentSection extends Section {
@@ -1380,24 +1449,29 @@ class VoiceSentimentSection extends Section {
         const neg = analysis.totals.negative || 0;
         const regions = analysis.regions.filter(r => r.name !== Regions.UNASSIGNED).length;
         return Ui.kpis([
-            analysis.total ? { value: Fmt.int(analysis.total), label: 'Tagged reviews' } : null,
+            analysis.total ? { value: Fmt.int(analysis.total), label: 'Player sentiment reviews' } : null,
             analysis.languages.length ? { value: Fmt.int(analysis.languages.length), label: 'Review languages' } : null,
             neg && analysis.total ? { value: Fmt.pct(neg / analysis.total * 100), label: 'Negative share' } : null,
             market ? { value: Fmt.int(market.total), label: 'All reviews in scope' }
                 : regions > 1 ? { value: Fmt.int(regions), label: 'Market regions' } : null,
         ]);
     }
-    regionBlock() {
-        const regions = this.ctx.analysis.regionsByVolume.slice(0, 5);
-        if (!regions.length)
-            return '';
-        const rows = regions.map((r, i) => `
-      <div class="rank-row">
-        <span class="rank">${String(i + 1).padStart(2, '0')}</span>
-        <span class="rank-name">${esc(r.name)}</span>
-        <span class="rank-value">${Fmt.int(r.total)}</span>
-      </div>`).join('');
-        return Ui.block(Ui.blockHead('Where tagged feedback is concentrated (top 5 regions)') + `<div class="ranking">${rows}</div>`);
+    get keepWithPrevious() { return true; }
+    /** "almost all requests", "mostly negative", "with mixed sentiment". */
+    static lean(group, defs) {
+        const top = [...defs].sort((a, b) => (group.counts[b.key] || 0) - (group.counts[a.key] || 0))[0];
+        const share = (group.counts[top.key] || 0) / (group.total || 1);
+        const word = { request: 'requests', negative: 'negative', positive: 'positive' }[top.key] || top.label.toLowerCase();
+        return share === 1 ? `all ${word}` : share >= 0.85 ? `almost all ${word}` : share >= 0.5 ? `mostly ${word}` : 'with mixed sentiment';
+    }
+    mixHeadline() {
+        const { analysis, statusDefs } = this.ctx;
+        const top = [...statusDefs].sort((a, b) => (analysis.totals[b.key] || 0) - (analysis.totals[a.key] || 0))[0];
+        if (!top)
+            return 'All player sentiment reviews, split by sentiment';
+        const name = { request: 'Language requests', negative: 'Negative reviews', positive: 'Positive reviews' }[top.key] || top.label;
+        const n = analysis.totals[top.key] || 0;
+        return `${name} make up ${Fmt.pct(n / analysis.total * 100)} of player sentiment reviews (${Fmt.int(n)} of ${Fmt.int(analysis.total)})`;
     }
     /**
      * Player sentiment reviews only (the workbook), by standard market region: a donut of where
@@ -1430,18 +1504,18 @@ class VoiceSentimentSection extends Section {
           ${statusDefs.map(s => { const v = Text.num(g.counts[s.key]); return `<td class="num"><span class="cell-count tone-${s.tone}${v ? '' : ' zero'}">${Fmt.int(v)}</span></td>`; }).join('')}
           ${neg ? `<td class="num rs-neg">${Fmt.pct((g.counts.negative || 0) / g.total * 100)}</td>` : ''}
         </tr>`).join('');
+        const worst = groups.filter(g => g.total >= 5 && (g.counts.negative || 0) > 0).sort((a, b) => b.counts.negative / b.total - a.counts.negative / a.total)[0];
         const head = Ui.th('Region') + Ui.th('Sentiment split') + statusDefs.map(s => Ui.th(s.label, { num: true })).join('') + (neg ? Ui.th('Negative share', { num: true }) : '');
         return Ui.block(
-            Ui.blockHead('Player sentiment reviews by region', `All ${Fmt.int(total)} player sentiment reviews from the workbook, by market region, with the sentiment breakdown for each region.`)
-            + `<div class="region-chart">${Ui.donut(slices, { total, label: 'Sentiment reviews', title: 'Player sentiment reviews by region' })}${list}</div>`
-            + `<div class="block-sub">${Ui.blockHead('Sentiment breakdown by region')}${Ui.legend(statusDefs)}${Ui.table(head, body, 'region-sentiment')}</div>`);
+            Ui.chartHead(`${groups[0].name} sends ${Fmt.pct(groups[0].total / total * 100)} of player sentiment reviews, ${VoiceSentimentSection.lean(groups[0], statusDefs)}`, `All ${Fmt.int(total)} player sentiment reviews from the workbook, by market region, with the sentiment breakdown for each region.`)
+            + `<div class="region-chart">${Ui.donut(slices, { total, label: 'Reviews', title: 'Player sentiment reviews by region' })}${list}</div>`
+            + `<div class="block-sub">${Ui.chartHead(worst ? `Sentiment breakdown by region: ${worst.name} has the highest negative share, ${Fmt.pct(worst.counts.negative / worst.total * 100)}` : 'Sentiment breakdown by region')}${Ui.legend(statusDefs)}${Ui.table(head, body, 'region-sentiment')}</div>`);
     }
     renderBody() {
         const { analysis, statusDefs } = this.ctx;
         return [
             this.kpiTiles(),
-            Ui.block(Ui.blockHead('All tagged reviews, split by sentiment') + Ui.legend(statusDefs) + Ui.sentimentBar(analysis.totals, statusDefs, analysis.total)),
-            this.regionBlock(),
+            Ui.block(Ui.chartHead(this.mixHeadline()) + Ui.legend(statusDefs) + Ui.sentimentBar(analysis.totals, statusDefs, analysis.total)),
             this.regionPie(),
         ].join('');
     }
@@ -1452,7 +1526,7 @@ class VoiceSentimentSection extends Section {
 class ProductSection extends Section {
     get eyebrow() { return 'Across the line-up'; }
     get title() { return 'Where the [[player voice]] is loudest'; }
-    get howToRead() { return 'One bar per product, sized by tagged reviews and split by sentiment.'; }
+    get howToRead() { return 'One bar per title, sized by player sentiment reviews and split by sentiment.'; }
     isAvailable() { return !this.ctx.filtered && this.ctx.products.length > 1; }
     renderBody() {
         const { reviews, products, statusDefs } = this.ctx;
@@ -1466,7 +1540,7 @@ class ProductSection extends Section {
         ${Ui.sentimentBar(r.counts, statusDefs, r.total, r.total / max * 100)}
         <div class="total">${Fmt.int(r.total)}</div>
       </div>`).join('');
-        return Ui.block(Ui.legend(statusDefs) + `<div class="bar-rows">${body}</div>`, { splittable: true });
+        return Ui.block(Ui.chartHead(`${rows[0].name} draws the most player sentiment reviews: ${Fmt.int(rows[0].total)} of ${Fmt.int(reviews.length)}`) + Ui.legend(statusDefs) + `<div class="bar-rows">${body}</div>`, { splittable: true });
     }
 }
 // ------------------------------------------------------------
@@ -1628,7 +1702,12 @@ class TimelineSection extends Section {
       </div>`;
     }
     renderBody() {
-        return Ui.block(Ui.legend(this.ctx.statusDefs) + this.chart(this.items()));
+        const { bins, lo } = this.layout(this.items());
+        const peak = bins.reduce((best, b, i) => (b.length > bins[best].length ? i : best), 0);
+        const headline = bins[peak].length >= 2
+            ? `Feedback peaked in the week of ${Dates.iso(new Date(lo + peak * TimelineSection.WEEK))}, with ${Fmt.int(bins[peak].length)} reviews`
+            : `${Fmt.int(this.items().length)} dated reviews across the fetch window`;
+        return Ui.block(Ui.chartHead(headline) + Ui.legend(this.ctx.statusDefs) + this.chart(this.items()));
     }
 }
 // ------------------------------------------------------------
@@ -1664,12 +1743,13 @@ class QuotesSection extends Section {
         const href = Html.safeUrl(review.link);
         const meta = [review.product, Html.cell(review.date)].filter(Boolean).map(esc).join(' · ');
         const original = review.originalText || review.englishText || review.quoteText;
-        const explanation = review.summary && review.summary !== original ? review.summary : '';
+        // Quote cards show the summary's first statement; the full text stays in the review log.
+        const explanation = review.summary && review.summary !== original ? review.summary.split(/\r?\n|\u2014{2,}/)[0].trim() : '';
         return `<article class="quote tone-${review.tone}">
       <div class="q-head"><span class="status-badge tone-${review.tone}">${esc(review.status)}</span><span>${esc(review.language)}</span></div>
       <div class="q-review">
         <div class="q-label">Original review</div>
-        <p>${esc(Text.clip(original, 340))}</p>
+        <p>${esc(Text.clipVisual(original, 280))}</p>
       </div>
       ${explanation ? `<div class="q-explanation"><div class="q-label">Explanation</div><p>${esc(Text.clip(explanation, 280))}</p></div>` : ''}
       <div class="q-meta">${meta}${href ? `${meta ? ' · ' : ''}<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Source</a>` : ''}</div>
@@ -1693,7 +1773,7 @@ class BreakdownSection extends Section {
         ${defs.map(s => { const v = Text.num(row.counts[s.key]); return `<td class="num"><span class="cell-count tone-${s.tone}${v ? '' : ' zero'}">${Fmt.int(v)}</span></td>`; }).join('')}
         <td class="num row-total">${Fmt.int(row.total)}</td>
       </tr>`).join('')).join('');
-        const head = Ui.th('Market region') + Ui.th('Review language and reviewer country') + defs.map(s => Ui.th(s.label, { num: true })).join('') + Ui.th('Total', { num: true });
+        const head = Ui.th('Region') + Ui.th('Language and country') + defs.map(s => Ui.th(s.label, { num: true })).join('') + Ui.th('Total', { num: true });
         return Ui.block(Ui.table(head, body, 'breakdown'), { splittable: true });
     }
 }
@@ -1799,6 +1879,7 @@ class Findings {
             facts.push(`${lang} reviews make up ${Fmt.share(sup.share)} of all reviews in scope${sup.supported ? ', and the table lists it as supported' : ''}.`);
         return {
             tag: 'Demand',
+            lead: `${lang} is the most requested language, with ${Fmt.int(n)} of ${Fmt.int(reqs.length)} requests.`,
             title: `${lang} is the most requested language: ${Fmt.int(n)} of ${Fmt.int(reqs.length)} requests`,
             body: facts.join(' '),
             quote: Findings.quote(mine, Findings.langRe(lang)),
@@ -1845,6 +1926,7 @@ class Findings {
         const also = counts.slice(1, 4).map(x => `${x.t.label} (${x.hits.length})`);
         return {
             tag: 'Quality',
+            lead: `The top complaint is ${top.t.label}, in ${top.hits.length} of ${negs.length} negative reviews.`,
             title: `Top complaint: ${top.t.label} (${top.hits.length} of ${negs.length} negative reviews)`,
             body: `By language: ${Findings.list(langs)}.${also.length ? ` Also raised: ${Words.list(also)}.` : ''}`,
             quote: Findings.quote(top.hits, top.t.test),
@@ -1865,8 +1947,9 @@ class Findings {
         return {
             language: best.l.language,
             tag: 'Strength',
+            lead: `${best.l.language} players respond best, with ${best.pos} positive reviews against ${best.neg} negative.`,
             title: `${best.l.language} players respond well: ${best.pos} positive, ${best.neg} negative`,
-            body: `${why.length ? `Of the positive reviews, ${Words.list(why)}.` : `${best.pos} of ${best.l.total} tagged ${best.l.language} reviews are positive.`}${best.neg ? ` The ${best.neg} negative ${best.neg === 1 ? 'one needs' : 'ones need'} a look before this becomes a pattern.` : ''}`,
+            body: `${why.length ? `Of the positive reviews, ${Words.list(why)}.` : `${best.pos} of ${best.l.total} ${best.l.language} player sentiment reviews are positive.`}${best.neg ? ` The ${best.neg} negative ${best.neg === 1 ? 'one needs' : 'ones need'} a look before this becomes a pattern.` : ''}`,
             quote: Findings.quote(pos, new RegExp(`${Findings.themeRe('praise', 'added').source}|${Findings.langRe(Findings.base(best.l.language)).source}|translat|locali`, 'i')),
         };
     }
@@ -1883,7 +1966,7 @@ class Findings {
         return {
             tag: 'Risk',
             title: `${worst.l.language} is the most critical audience: ${Fmt.pct(worst.rate * 100)} negative`,
-            body: `${worst.l.counts.negative} of ${worst.l.total} tagged ${worst.l.language} reviews are negative, against ${Fmt.pct(overall * 100)} overall.`,
+            body: `${worst.l.counts.negative} of ${worst.l.total} ${worst.l.language} player sentiment reviews are negative, against ${Fmt.pct(overall * 100)} overall.`,
             quote: Findings.quote(ctx.reviews.filter(r => r.statusKey === 'negative' && r.language === worst.l.language), /translat|locali|text|language|wrong|error/i),
         };
     }
@@ -1897,6 +1980,7 @@ class Findings {
         const gaps = m.hasSupport ? t1.langs.filter(l => l.supported === false) : [];
         return {
             tag: 'Reach',
+            lead: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews.`,
             title: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews`,
             body: `${Words.list(t1.langs.map(l => `${l.language} (${Fmt.share(l.share)})`))}, ${Fmt.int(t1.count)} of ${Fmt.int(m.total)} reviews.${gaps.length ? ` Not yet supported among them: ${Words.list(gaps.map(l => l.language))}.` : ''}`,
         };
@@ -1963,7 +2047,7 @@ class KeyFindingsSection extends Section {
         ${quote}
       </article>`;
     }
-    renderBody() { return `<div class="card-grid cols-2">${this.items().map(f => this.card(f)).join('')}</div>`; }
+    renderBody() { return `<div class="card-grid${this.items().length === 3 ? '' : ' cols-2'}">${this.items().map(f => this.card(f)).join('')}</div>`; }
 }
 // ------------------------------------------------------------
 // 6. Where reviews come from: region donut + ranked list.
@@ -2002,7 +2086,7 @@ class RegionSection extends Section {
         </div>`).join('');
         const list = `<div class="region-list"><div class="region-head"><span></span><span>Region</span><span>Reviews</span><span>Share</span></div>${rows}</div>`;
         const chart = Ui.donut(slices, { total: m.total, label: 'Reviews', title: 'Reviews by region' });
-        return kpis + Ui.block(Ui.blockHead('Share of all reviews, by region') + `<div class="region-chart">${chart}${list}</div>`);
+        return kpis + Ui.block(Ui.chartHead(`${m.regions[0].name} holds ${Fmt.pct(m.regions[0].share)} of all reviews, followed by ${m.regions[1].name} at ${Fmt.pct(m.regions[1].share)}`, 'Share of all reviews, by market region') + `<div class="region-chart">${chart}${list}</div>`);
     }
 }
 // ------------------------------------------------------------
@@ -2094,7 +2178,6 @@ class MoneyLensSection extends Section {
     get howToRead() {
         return "Each language's share of reviews is multiplied by the game's own Steam price in that language's main market, compared with the US price, then rescaled to 100% across the priced languages. It shows where the spend sits, not only where the players are.";
     }
-    get startsNewPage() { return true; }
     isAvailable() { return !!(this.ctx.market && this.ctx.prices && this.data().priced.length >= 2); }
     data() { return this._data || (this._data = this.ctx.prices.lens(this.ctx.market)); }
     static money(row) {
@@ -2168,6 +2251,11 @@ class MoneyLensSection extends Section {
         const head = th('Language', 'c-lang') + th('Steam market', 'c-mkt') + th('Steam price', 'c-price', true) + th('Vs US', 'c-vs', true) + th('Reviews', 'c-rev', true) + th('Weighted', 'c-w', true);
         return Ui.table(head, body, 'money');
     }
+    headline() {
+        const { priced } = this.data();
+        const up = [...priced].sort((a, b) => (b.weight - b.reviewShare) - (a.weight - a.reviewShare))[0];
+        return `${up.lang.language} rises from ${Fmt.pct(up.reviewShare)} of reviews to ${Fmt.pct(up.weight)} of revenue weight`;
+    }
     sources() {
         const { meta } = this.ctx.prices;
         const store = [meta.game, meta.storePage].filter(Boolean).join(', ');
@@ -2195,7 +2283,7 @@ class MoneyLensSection extends Section {
     renderBody() {
         const rows = this.data().priced.slice(0, Config.moneyLensRows);
         return [
-            Ui.block(Ui.blockHead('Share of reviews vs revenue weight, largest languages') + this.chart(rows)),
+            Ui.block(Ui.chartHead(this.headline(), 'Share of reviews vs revenue weight, largest languages') + this.chart(rows)),
             this.sources(),
             Ui.block(this.table(this.data().priced), { splittable: true }),
             this.methodNotes(),
@@ -2207,13 +2295,18 @@ class MoneyLensSection extends Section {
 // 10. Method and limits
 // ------------------------------------------------------------
 class MethodSection extends Section {
+    get appendix() { return 'A'; }
     get eyebrow() { return 'Method and limits'; }
     get title() { return 'How to read [[these numbers]]'; }
-    get startsNewPage() { return true; }
     isAvailable() { return this.ctx.analysis.total > 0 || !!this.ctx.market; }
     renderBody() {
         const { analysis, market, meta } = this.ctx;
         const measured = [];
+        const fetchedN = Text.leadingNumber(meta.fetched), analysedN = Text.leadingNumber(meta.analysed);
+        if (analysis.total && analysedN) {
+            const from = fetchedN ? `Of ${Fmt.int(fetchedN)} reviews fetched, ${Fmt.int(analysedN)} were analysed` : `${Fmt.int(analysedN)} reviews were analysed`;
+            measured.push(`${from}, and ${Fmt.int(analysis.total)} of those were classed as useful and tagged with a sentiment. Those ${Fmt.int(analysis.total)} are the player sentiment reviews in this report.`);
+        }
         if (analysis.total)
             measured.push(`${Fmt.int(analysis.total)} localization-related reviews from the uploaded workbook, tagged ${Words.list(this.ctx.statusDefs.map(s => s.label))}, across ${Words.count(analysis.languages.length, 'review language')}${meta.platform ? ` on ${meta.platform}` : ''}.`);
         if (market)
@@ -2235,6 +2328,7 @@ class MethodSection extends Section {
 // data is missing; numbers (01, 02...) follow the visible order.
 // ============================================================
 const SECTION_REGISTRY = [
+    SummarySection,
     VoiceSentimentSection,
     KeyFindingsSection,
     ProductSection,
@@ -2266,8 +2360,10 @@ class CoverPage {
         const bits = [];
         if (fetched)
             bits.push(`${Fmt.int(fetched)} reviews fetched`);
-        if (analysed || this.analysis.total)
-            bits.push(`${Fmt.int(analysed || this.analysis.total)} represented in the sentiment analysis`);
+        if (analysed)
+            bits.push(`${Fmt.int(analysed)} analysed`);
+        if (this.analysis.total)
+            bits.push(`${Fmt.int(this.analysis.total)} player sentiment review${this.analysis.total === 1 ? '' : 's'}`);
         return bits.length ? bits.join(', ') + '.' : 'Counts and sentiment breakdowns in this report are derived directly from the uploaded workbook.';
     }
     get metaItems() {
@@ -2332,9 +2428,10 @@ class ReportBody {
         this.sectionClasses
             .map(SectionClass => new SectionClass(this.ctx))
             .filter(section => section.isAvailable())
-            .forEach(section => {
-                if (section.eyebrow)
+            .forEach((section, i) => {
+                if (section.eyebrow && section.numbered)
                     section.number = ++number;
+                section.pageBreak = i > 0 && !section.keepWithPrevious;
                 node.appendChild(section.render());
             });
         return node;
@@ -2351,7 +2448,7 @@ class ReviewCard {
         return [
             r.language ? ['Review language', r.language] : null,
             r.region ? ['Region', r.region] : null,
-            r.product ? ['Product', r.product] : null,
+            r.product ? ['Title', r.product] : null,
             date ? ['Date', date] : null,
             rating ? ['Rating', rating] : null,
             version ? ['Version', version] : null,
@@ -2399,7 +2496,7 @@ class ReviewCard {
 }
 class ReviewsBlock {
     constructor(reviews) { this.reviews = reviews; }
-    get eyebrow() { return 'Full review log'; }
+    get eyebrow() { return 'Appendix B · Full review log'; }
     get title() { return 'Every source, [[unfiltered]]'; }
     render() {
         if (!this.reviews.length)
@@ -2440,28 +2537,31 @@ class PrintController {
     constructor(body = document.body) { this.body = body; }
     static cssString(s) { return String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' '); }
     /** Running footer for printed pages: title, site, page number. */
-    static footerCss(title) {
-        const box = 'font-family:"Inter",Arial,sans-serif;font-size:9px;color:#8c8c8c;';
+    static footerCss(title, theme = 'dark') {
+        const light = theme === 'light';
+        const box = `font-family:"Inter",Arial,sans-serif;font-size:10px;color:${light ? '#666b75' : '#a6a6a6'};`;
         return `@page{
+      background:${light ? '#ffffff' : '#1a1a1a'};
       @bottom-left{content:"${PrintController.cssString(title)}";${box}}
       @bottom-center{content:"${PrintController.cssString(Config.brand.site)}";${box}}
       @bottom-right{content:counter(page);${box}}
     }`;
     }
-    writeFooterStyle(title) {
+    writeFooterStyle(title, theme) {
         let style = document.getElementById('print-footer-style');
         if (!style) {
             style = document.createElement('style');
             style.id = 'print-footer-style';
             document.head.appendChild(style);
         }
-        style.textContent = PrintController.footerCss(title);
+        style.textContent = PrintController.footerCss(title, theme);
     }
-    async print(mode, title) {
+    async print(mode, title, theme = 'dark') {
+        document.documentElement.classList.toggle('print-light', theme === 'light');
         Object.values(PrintController.MODES).forEach(cls => this.body.classList.remove(cls));
         if (PrintController.MODES[mode])
             this.body.classList.add(PrintController.MODES[mode]);
-        this.writeFooterStyle(title);
+        this.writeFooterStyle(title, theme);
         if (document.fonts && document.fonts.ready) {
             try {
                 await document.fonts.ready;
@@ -2528,7 +2628,7 @@ class HtmlExporter {
         const slug = String(title || 'report').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
         return `${slug || 'report'}-sentiment-report.html`;
     }
-    static async build(reportEl, { title, includeReviews }) {
+    static async build(reportEl, { title, includeReviews, theme = 'dark' }) {
         const clone = reportEl.cloneNode(true);
         if (!includeReviews)
             clone.querySelectorAll('.doc-reviews').forEach(n => n.remove());
@@ -2538,7 +2638,7 @@ class HtmlExporter {
         const css = await HtmlExporter.css();
         const styles = css ? `<style>\n${css}\n</style>` : `<link rel="stylesheet" href="${esc(new URL('styles.css', location.href).href)}">`;
         return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en"${theme === 'light' ? ' class="print-light"' : ''}>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2548,7 +2648,7 @@ class HtmlExporter {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="${HtmlExporter.FONTS}" rel="stylesheet">
 ${styles}
-<style>${PrintController.footerCss(title)}</style>
+<style>${PrintController.footerCss(title, theme)}</style>
 </head>
 <body class="exported">
 <div class="app-shell">
@@ -2696,7 +2796,7 @@ class ReportForm {
     }
     populateProducts(products) {
         const select = this.fields.productFilter;
-        select.innerHTML = '<option value="">All products</option>' + products.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+        select.innerHTML = '<option value="">All titles</option>' + products.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
         select.disabled = products.length < 2;
     }
     /** Returns { field, message } for the first problem, or null. */
@@ -2747,14 +2847,21 @@ class App {
         this.saveHtmlBtn = $('saveHtmlBtn');
         this.reportEl = $('report');
         this.printMode = $('printMode');
+        this.printTheme = $('printTheme');
         this.status = new StatusLine($('statusLine'));
         this.form = new ReportForm();
         this.printer = new PrintController();
         this.form.init();
         this.form.fields.productFilter.addEventListener('change', () => {
             const meta = this.dataset && this.dataset.metadata;
-            if (meta)
-                this.form.fields.gameTitle.value = this.form.fields.productFilter.value || meta.gameTitle || '';
+            if (!meta)
+                return;
+            const f = this.form.fields, title = f.productFilter.value;
+            f.gameTitle.value = title || meta.gameTitle || '';
+            // A single title shows its own counts, or none: never the whole workbook's.
+            const own = title ? ((meta.statsByTitle || {})[title] || { fetched: '', analysed: '' }) : meta;
+            f.fetched.value = own.fetched || '';
+            f.analysed.value = own.analysed || '';
         });
         ['dragenter', 'dragover'].forEach(evt => this.dropzone.addEventListener(evt, e => { e.preventDefault(); this.dropzone.classList.add('drag'); }));
         ['dragleave', 'drop'].forEach(evt => this.dropzone.addEventListener(evt, e => { e.preventDefault(); this.dropzone.classList.remove('drag'); }));
@@ -2805,7 +2912,7 @@ class App {
         const explicit = dataset.metadata.usefulCount;
         const notes = [];
         if (explicit && explicit !== analysis.total)
-            notes.push(`Note: workbook says ${Fmt.int(explicit)} useful reviews while the parsed tagged total is ${Fmt.int(analysis.total)}; source values were left unchanged.`);
+            notes.push(`Note: workbook says ${Fmt.int(explicit)} useful reviews while the parsed player sentiment total is ${Fmt.int(analysis.total)}; source values were left unchanged.`);
         const info = [];
         if (!dataset.metadata.publisher) {
             const found = PublisherBook.lookup(dataset.metadata);
@@ -2821,7 +2928,7 @@ class App {
             notes.push('Fetch window from was not found in the workbook; pick it from the calendar (required).');
         const plural = (n, word) => `${Fmt.int(n)} ${word}${n === 1 ? '' : 's'}`;
         this.status.set([`Parsed ${plural(dataset.sheetCount, 'sheet')}.`,
-            `${plural(analysis.total, 'player-sentiment review')} represented;`,
+            `${plural(analysis.total, 'player sentiment review')} found;`,
             `${plural(dataset.reviews.length, 'individual review')} available for the reviews section.`,
             ...info, ...notes].join(' '), notes.length ? 'warn' : 'ok');
         this.generateBtn.disabled = false;
@@ -2866,7 +2973,7 @@ class App {
     print() {
         if (!this.dataset || !this.reportEl.children.length)
             return this.status.set('Generate the report before printing.', 'error');
-        this.printer.print(this.printMode.value, this.title || 'Sentiment Report');
+        this.printer.print(this.printMode.value, this.title || 'Sentiment Report', this.printTheme.value);
     }
     async saveHtml() {
         if (!this.dataset || !this.reportEl.children.length)
@@ -2877,6 +2984,7 @@ class App {
             const { name, bytes } = await HtmlExporter.download(this.reportEl, {
                 title: this.title || 'Sentiment Report',
                 includeReviews: this.printMode.value === 'report-reviews',
+                theme: this.printTheme.value,
             });
             this.status.set(`Saved ${name} (${(bytes / 1048576).toFixed(1)} MB). It opens in any browser, works offline and can be printed to PDF.`, 'ok');
         }
