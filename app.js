@@ -1097,7 +1097,6 @@ class WorkbookParser {
             periodTo: window.to || Dates.toIso(labels.periodTo) || labels.periodTo || '',
             products: distinctProducts,
             fetched: stats.fetched || '',
-            analysed: stats.analysed || '',
             usefulCount: stats.usefulCount || (reviews.length || null),
             statsByTitle: this.scanStatsByTitle(distinctProducts),
         };
@@ -1128,7 +1127,7 @@ class WorkbookParser {
         });
         return result;
     }
-    /** Per-title "Fetched / Analysed" lines: the first such line within five rows below a cell holding the title. */
+    /** Per-title "Fetched" lines: the first such line within five rows below a cell holding the title. */
     scanStatsByTitle(titles) {
         const out = {};
         const names = new Map(titles.map(t => [Text.normalize(t), t]));
@@ -1138,9 +1137,9 @@ class WorkbookParser {
                 return;
             for (let i = r + 1; i <= r + 5 && i < grid.length; i++) {
                 const text = String((grid[i] || [])[c] ?? '');
-                const f = text.match(/\bFetched\s*:\s*([\d\s,.]+)/i), a = text.match(/\bAnaly[sz]ed\s*:\s*([\d\s,.]+)/i);
-                if (f || a) {
-                    out[title] = { fetched: f ? Text.digits(f[1]) : '', analysed: a ? Text.digits(a[1]) : '' };
+                const f = text.match(/\bFetched\s*:\s*([\d\s,.]+)/i);
+                if (f) {
+                    out[title] = { fetched: Text.digits(f[1]) };
                     return;
                 }
             }
@@ -1155,11 +1154,6 @@ class WorkbookParser {
                 const m = text.match(/\bFetched\s*:\s*([\d\s,.]+)/i);
                 if (m)
                     out.fetched = Text.digits(m[1]);
-            }
-            if (!out.analysed) {
-                const m = text.match(/\bAnaly[sz]ed\s*:\s*([\d\s,.]+)/i);
-                if (m)
-                    out.analysed = Text.digits(m[1]);
             }
             if (!out.usefulCount) {
                 const m = text.match(/\bUseful\s*:\s*([\d\s,.]+)/i);
@@ -2302,11 +2296,9 @@ class MethodSection extends Section {
     renderBody() {
         const { analysis, market, meta } = this.ctx;
         const measured = [];
-        const fetchedN = Text.leadingNumber(meta.fetched), analysedN = Text.leadingNumber(meta.analysed);
-        if (analysis.total && analysedN) {
-            const from = fetchedN ? `Of ${Fmt.int(fetchedN)} reviews fetched, ${Fmt.int(analysedN)} were analysed` : `${Fmt.int(analysedN)} reviews were analysed`;
-            measured.push(`${from}, and ${Fmt.int(analysis.total)} of those were classed as useful and tagged with a sentiment. Those ${Fmt.int(analysis.total)} are the player sentiment reviews in this report.`);
-        }
+        const fetchedN = Text.leadingNumber(meta.fetched);
+        if (analysis.total && fetchedN)
+            measured.push(`Of ${Fmt.int(fetchedN)} reviews fetched, ${Fmt.int(analysis.total)} are player sentiment reviews: the reviews tagged with a sentiment and used throughout this report.`);
         if (analysis.total)
             measured.push(`${Fmt.int(analysis.total)} localization-related reviews from the uploaded workbook, tagged ${Words.list(this.ctx.statusDefs.map(s => s.label))}, across ${Words.count(analysis.languages.length, 'review language')}${meta.platform ? ` on ${meta.platform}` : ''}.`);
         if (market)
@@ -2356,12 +2348,9 @@ class CoverPage {
     get eyebrow() { return ['Player sentiment analysis', this.meta.platform].filter(Boolean).join(' · '); }
     get lede() {
         const fetched = Text.leadingNumber(this.meta.fetched);
-        const analysed = Text.leadingNumber(this.meta.analysed);
         const bits = [];
         if (fetched)
             bits.push(`${Fmt.int(fetched)} reviews fetched`);
-        if (analysed)
-            bits.push(`${Fmt.int(analysed)} analysed`);
         if (this.analysis.total)
             bits.push(`${Fmt.int(this.analysis.total)} player sentiment review${this.analysis.total === 1 ? '' : 's'}`);
         return bits.length ? bits.join(', ') + '.' : 'Counts and sentiment breakdowns in this report are derived directly from the uploaded workbook.';
@@ -2723,7 +2712,7 @@ class PublisherBook {
 class ReportForm {
     static FIELD_IDS = [
         'gameTitle', 'publisher', 'platform', 'productFilter',
-        'periodFrom', 'periodTo', 'fetched', 'analysed', 'marketTable', 'marketScope', 'priceTable',
+        'periodFrom', 'periodTo', 'fetched', 'marketTable', 'marketScope', 'priceTable',
     ];
     constructor(doc = document) {
         this.fields = {};
@@ -2791,7 +2780,6 @@ class ReportForm {
         f.periodFrom.value = Dates.toIso(meta.periodFrom);
         f.periodTo.value = Dates.todayISO();
         f.fetched.value = meta.fetched || '';
-        f.analysed.value = meta.analysed || '';
         [f.publisher, f.periodFrom, f.periodTo].forEach(input => input.classList.remove('field-error'));
     }
     populateProducts(products) {
@@ -2824,7 +2812,6 @@ class ReportForm {
                 periodFrom: f.periodFrom.value.trim(),
                 periodTo: f.periodTo.value.trim(),
                 fetched: f.fetched.value || '',
-                analysed: f.analysed.value || '',
             },
             product: f.productFilter.value,
             market,
@@ -2858,10 +2845,9 @@ class App {
                 return;
             const f = this.form.fields, title = f.productFilter.value;
             f.gameTitle.value = title || meta.gameTitle || '';
-            // A single title shows its own counts, or none: never the whole workbook's.
-            const own = title ? ((meta.statsByTitle || {})[title] || { fetched: '', analysed: '' }) : meta;
+            // A single title shows its own fetched count, or none: never the whole workbook's.
+            const own = title ? ((meta.statsByTitle || {})[title] || { fetched: '' }) : meta;
             f.fetched.value = own.fetched || '';
-            f.analysed.value = own.analysed || '';
         });
         ['dragenter', 'dragover'].forEach(evt => this.dropzone.addEventListener(evt, e => { e.preventDefault(); this.dropzone.classList.add('drag'); }));
         ['dragleave', 'drop'].forEach(evt => this.dropzone.addEventListener(evt, e => { e.preventDefault(); this.dropzone.classList.remove('drag'); }));
