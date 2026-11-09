@@ -893,6 +893,15 @@ input[type="file"]{ display:none; }
   letter-spacing:.04em;
   color:var(--text-faint);
 }
+.f-source{
+  margin-top:14px;
+  font-size:12px;
+  letter-spacing:.04em;
+  color:var(--text-faint);
+  overflow-wrap:anywhere;
+}
+.f-quote a,.f-source a{ color:var(--blue); text-decoration:none; }
+.f-bit{ white-space:nowrap; }
 .info-card.finding > p{ margin-bottom:0; }
 
 /* Coverage tiers */

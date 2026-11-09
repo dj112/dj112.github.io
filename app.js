@@ -1817,7 +1817,8 @@ class Findings {
     }
     static used = new Set();
     static PROFANITY = /\b(shit|fuck|crap|bitch|bastard|asshole|piss|dick|cunt|wtf)\w*/i;
-    /** A sentence from the players' English text that matches the finding (re), clean and 25-170 characters. No match, no quote. */
+    static cite(r, text = '') { return { text, lang: r.language, region: r.region, product: r.product, date: r.date, link: r.link }; }
+    /** A sentence from the players' English text that matches the finding (re), clean and 25-170 characters. No match: no quote text, but still one review behind the finding to cite. */
     static quote(reviews, re) {
         const found = [];
         reviews.forEach(r => {
@@ -1827,11 +1828,17 @@ class Findings {
                     found.push({ r, q });
             });
         });
-        if (!found.length)
-            return null;
-        const pick = found.sort((a, b) => Math.abs(a.q.length - 80) - Math.abs(b.q.length - 80))[0];
+        const linked = r => (Html.safeUrl(r.link) ? 1 : 0);
+        if (!found.length) {
+            const r = reviews.find(x => linked(x) && !Findings.used.has(x.link)) || reviews.find(linked);
+            if (r)
+                Findings.used.add(r.link);
+            return r ? Findings.cite(r) : null;
+        }
+        const pick = found.sort((a, b) => linked(b.r) - linked(a.r) || Math.abs(a.q.length - 80) - Math.abs(b.q.length - 80))[0];
         Findings.used.add(pick.q); // each quote appears once per report
-        return { text: pick.q, lang: pick.r.language, region: pick.r.region };
+        Findings.used.add(pick.r.link);
+        return Findings.cite(pick.r, pick.q);
     }
     static langRe(lang) { return (Findings.LANGS.find(([n]) => n === lang) || [null, new RegExp(`\\b${lang}`, 'i')])[1]; }
     static themeRe(...keys) { return new RegExp(Config.themes.filter(t => keys.includes(t.key)).map(t => t.test.source).join('|'), 'i'); }
@@ -1974,6 +1981,7 @@ class Findings {
         const gaps = m.hasSupport ? t1.langs.filter(l => l.supported === false) : [];
         return {
             tag: 'Reach',
+            fromTable: true,
             lead: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews.`,
             title: `${Words.count(t1.langs.length, 'language', true)} cover ${Fmt.pct(t1.reach)} of all reviews`,
             body: `${Words.list(t1.langs.map(l => `${l.language} (${Fmt.share(l.share)})`))}, ${Fmt.int(t1.count)} of ${Fmt.int(m.total)} reviews.${gaps.length ? ` Not yet supported among them: ${Words.list(gaps.map(l => l.language))}.` : ''}`,
@@ -1990,6 +1998,7 @@ class Findings {
         const top = gaps[0];
         return {
             tag: 'Reach',
+            fromTable: true,
             title: `${top.language} is the largest unsupported language: ${Fmt.share(top.share)} of reviews`,
             body: `${Fmt.int(top.count)} reviews, ranking ${Words.ordinal(m.activeLangs.indexOf(top) + 1)} of ${m.activeLangs.length} review languages. All unsupported languages together hold ${Fmt.pct(share)}.`,
         };
@@ -2001,6 +2010,7 @@ class Findings {
             return null;
         return {
             tag: 'Watch',
+            fromTable: true,
             title: quiet.length === 1 ? `${quiet[0].language} is supported but quiet` : `${Words.count(quiet.length, 'supported language', true)} stay quiet`,
             body: `${Words.list(quiet.map(l => `${l.language} (${Fmt.share(l.share)})`))} each draw under ${Config.quietShare}% of reviews.`,
         };
@@ -2032,8 +2042,31 @@ class KeyFindingsSection extends Section {
     get howToRead() { return 'Each card states what the data shows and the reviews behind it. Requested languages and themes are found by keyword matching on the review summaries and English text, so read the quoted review before acting.'; }
     items() { return this._items || (this._items = Findings.build(this.ctx)); }
     isAvailable() { return this.items().length >= 2; }
+    /** The review behind a finding: language, region, title (only when the report spans several), date and a link to it. */
+    reviewSource(q) {
+        const bits = [[q.lang, q.region].filter(Boolean).join(', '), this.ctx.products.length > 1 ? q.product : '', Html.cell(q.date)].filter(Boolean).map(v => `<span class="f-bit">${esc(v)}</span>`);
+        const href = Html.safeUrl(q.link);
+        if (href)
+            bits.push(`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Source</a>`);
+        return bits.join(' · ');
+    }
+    /** Findings read from the Step 03 table cite that table's scope and origin. */
+    tableSource() {
+        const { market: m, marketScope } = this.ctx;
+        const origin = [marketScope || 'All-review table', m.meta.source].filter(Boolean).join('; ').replace(/\.$/, '');
+        const store = m.meta.appId && /steam/i.test(m.meta.source || '')
+            ? ` <a href="https://store.steampowered.com/app/${esc(m.meta.appId)}/" target="_blank" rel="noopener noreferrer">Store page</a>`
+            : '';
+        return `Source: ${esc(origin)}.${store}`;
+    }
     card(f) {
-        const quote = f.quote ? `<blockquote class="f-quote">"${esc(f.quote.text)}"<cite>${esc([f.quote.lang, f.quote.region].filter(Boolean).join(', '))}</cite></blockquote>` : '';
+        let quote = '';
+        if (f.quote && f.quote.text)
+            quote = `<blockquote class="f-quote">"${esc(f.quote.text)}"<cite>${this.reviewSource(f.quote)}</cite></blockquote>`;
+        else if (f.quote)
+            quote = `<div class="f-source">Example review: ${this.reviewSource(f.quote)}</div>`;
+        else if (f.fromTable)
+            quote = `<div class="f-source">${this.tableSource()}</div>`;
         return `<article class="info-card finding">
         <div class="f-tag">${esc(f.tag)}</div>
         <h3>${esc(f.title)}</h3>
