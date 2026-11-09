@@ -594,7 +594,7 @@ input[type="file"]{ display:none; }
 .bar-row .total{
   font-size:var(--fs-small);
   color:var(--text-dim);
-  text-align:right;
+  text-align:center;
   font-variant-numeric:tabular-nums;
 }
 .bar-track{
@@ -640,11 +640,14 @@ input[type="file"]{ display:none; }
 .tbl tr{ break-inside:avoid; }
 .tbl tbody tr:nth-child(-n+2){ break-after:avoid; }
 .tbl tbody tr:nth-last-child(-n+2){ break-before:avoid; }
-.tbl .num{ text-align:right; }
+/* Numeric columns: header and values centred on the same axis in every table. */
+.tbl .num{ text-align:center; }
+.tbl.distribution td.num,.tbl.money td.num{ padding-left:var(--sp-2); padding-right:var(--sp-2); }
+/* Headers get the full column width; the left inset cancels the letter-spacing trailing the last letter. */
+.tbl > thead > tr > th.num{ padding-left:var(--ls-label); padding-right:0; }
 .tbl .strong,.tbl .row-total{ font-weight:700; }
 .tbl.breakdown{ table-layout:fixed; }
 .tbl.breakdown th:nth-child(1),.tbl.breakdown th:nth-child(2){ width:21%; }
-.tbl.breakdown .num{ text-align:center; }
 .tbl.breakdown tr.region-start td{ border-top:1px solid var(--rule); }
 .tbl.breakdown td.region{ font-weight:700; overflow-wrap:anywhere; }
 .tbl.breakdown td.lang{ color:var(--text-dim); overflow-wrap:anywhere; }
@@ -732,7 +735,6 @@ input[type="file"]{ display:none; }
 /* Aggregate distribution: language / localized / bar / reviews / share */
 .tbl.distribution{ table-layout:fixed; }
 .tbl.distribution thead th{ padding:0 var(--sp-3) var(--sp-3) 0; }
-.tbl.distribution thead th:last-child{ padding-right:0; }
 .tbl.distribution thead th.c-lang{ width:28%; }
 .tbl.distribution thead th.c-loc{ width:16%; }
 .tbl.distribution thead th.c-rev{ width:13%; }
@@ -816,8 +818,8 @@ input[type="file"]{ display:none; }
 .region-row .sw{ width:10px; height:10px; border-radius:3px; background:var(--c); }
 .region-row .nm{ font-weight:500; overflow-wrap:anywhere; }
 .region-row .nm small{ display:block; font-size:12px; font-weight:400; color:var(--text-faint); }
-.region-row .ct{ text-align:right; font-variant-numeric:tabular-nums; }
-.region-row .sh{ text-align:right; font-weight:600; color:var(--blue); font-variant-numeric:tabular-nums; }
+.region-row .ct{ text-align:center; font-variant-numeric:tabular-nums; }
+.region-row .sh{ text-align:center; font-weight:600; color:var(--blue); font-variant-numeric:tabular-nums; }
 .region-head{
   display:grid;
   grid-template-columns:12px minmax(0,1fr) 72px 56px;
@@ -830,7 +832,7 @@ input[type="file"]{ display:none; }
   text-transform:uppercase;
   color:var(--head-gray);
 }
-.region-head span:nth-child(3),.region-head span:nth-child(4){ text-align:right; }
+.region-head span:nth-child(3),.region-head span:nth-child(4){ text-align:center; }
 
 .block-sub{
   break-inside:avoid;
@@ -1037,15 +1039,16 @@ input[type="file"]{ display:none; }
 .ml-fill.reviews,.ml-key.reviews{ background:var(--ml-reviews); }
 .ml-fill.weight,.ml-key.weight{ background:var(--blue); }
 .ml-vals{
-  display:flex;
-  justify-content:flex-end;
-  gap:10px;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:4px;
+  text-align:center;
   font-size:13px;
   font-variant-numeric:tabular-nums;
   white-space:nowrap;
 }
 .ml-vals span{ color:var(--text-dim); }
-.ml-vals b{ color:var(--blue); font-weight:700; min-width:44px; text-align:right; }
+.ml-vals b{ color:var(--blue); font-weight:700; }
 .tbl.money{ table-layout:fixed; font-size:13.5px; }
 .tbl.money thead th{ padding:0 var(--sp-2) var(--sp-3) 0; }
 .tbl.money td{ padding:6px var(--sp-2) 6px 0; }

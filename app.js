@@ -1343,8 +1343,8 @@ class Ui {
             return `<path class="donut-seg ${s.cls}" d="${d}"/>`;
         }).join('');
         return `<svg class="donut" viewBox="0 0 ${S} ${S}" role="img" aria-label="${esc(title)}">${segs}${labels.join('')}
-      <text class="donut-total" x="${C}" y="${C + 4}" text-anchor="middle">${Fmt.int(total)}</text>
-      <text class="donut-label" x="${C}" y="${C + 26}" text-anchor="middle">${esc(label.toUpperCase())}</text></svg>`;
+      <text class="donut-total" x="${C}" y="${C}" text-anchor="middle">${Fmt.int(total)}</text>
+      <text class="donut-label" x="${C}" y="${C + 22}" text-anchor="middle">${esc(label.toUpperCase())}</text></svg>`;
     }
 }
 /* ===== sections.js ===== */
