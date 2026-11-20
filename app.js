@@ -53,6 +53,9 @@ const Config = Object.freeze({
     findingsCount: 4,
     // A supported language under this review share is called out as "quiet".
     quietShare: 0.5,
+    // Title by title: languages under this share of a title's reviews, with no player sentiment
+    // reviews, fold into that title's Other languages row.
+    titleLangMin: 1,
     // Publisher fallback when the workbook has none. Key by Steam app ID (from the review
     // links) or by game title in lower case. Whatever you type in the Publisher field is
     // also remembered in this browser for the next report on the same game.
@@ -1638,53 +1641,100 @@ class ProductSection extends Section {
 class TitleSection extends Section {
     get eyebrow() { return 'Title by title'; }
     get title() { return 'All reviews and [[player sentiment]], per title'; }
-    get howToRead() { return "Each title's review counts from its own table sit next to its player sentiment reviews from the workbook, both grouped into the same market regions. Shares are of that title's reviews."; }
+    get howToRead() { return `Each title's review counts from its own table sit next to its player sentiment reviews from the workbook, language by language, with whether the title supports each language. Languages under ${Config.titleLangMin}% of a title's reviews and with no player sentiment reviews are folded into Other languages.`; }
     isAvailable() { return !this.ctx.filtered && this.ctx.products.length > 1 && this.ctx.titleMarkets.size > 0; }
     /** Follows the line-up chart on the same page; each title block moves to the next page whole if it does not fit. */
     get keepWithPrevious() { return true; }
-    /** One row per market region: all-review count and share from the table, sentiment counts from the workbook. */
+    /** "Chinese (Simplified)", "Simplified Chinese" and "chinese simplified" share one key. */
+    static langKey(name) {
+        return Text.normalize(name).replace(/brazilian/g, 'brazil').replace(/\blatam\b/g, 'latin america').replace(/[^a-z]+/g, ' ').trim().split(' ').sort().join(' ');
+    }
+    static baseKey(name) { return TitleSection.langKey(String(name).replace(/\(.*?\)/g, '')); }
+    /** Player sentiment per language for one title; bare names get their variant from the reviewer's country. */
+    sentiment(title) {
+        const map = new Map();
+        this.ctx.reviews.filter(r => r.product === title).forEach(r => {
+            const name = Regions.variant(r.language, r.region) || 'Unknown';
+            const key = TitleSection.langKey(name);
+            if (!map.has(key))
+                map.set(key, { name, counts: {}, total: 0 });
+            const g = map.get(key);
+            g.counts[r.statusKey] = (g.counts[r.statusKey] || 0) + 1;
+            g.total += 1;
+        });
+        return [...map.values()];
+    }
+    /** One row per language: all-review count, share and support from the title's table, sentiment counts from the workbook. */
     rows(title) {
-        const m = this.ctx.titleMarkets.get(title);
-        const sentiment = SentimentAnalysis.fromReviews(this.ctx.reviews.filter(r => r.product === title));
-        const byName = new Map();
-        const row = name => {
-            if (!byName.has(name))
-                byName.set(name, { name, count: 0, share: 0, counts: {}, total: 0 });
-            return byName.get(name);
-        };
-        if (m)
-            m.regions.forEach(r => Object.assign(row(r.name), { count: r.count, share: r.share }));
-        sentiment.regionsByVolume.forEach(g => Object.assign(row(g.name), { counts: g.counts, total: g.total }));
-        const last = r => ([Regions.UNASSIGNED, Regions.OTHER].includes(r.name) ? 1 : 0);
-        return { m, total: sentiment.total, rows: [...byName.values()].sort((a, b) => last(a) - last(b) || (b.count - a.count) || (b.total - a.total)) };
+        const m = this.ctx.titleMarkets.get(title) || null;
+        const sentiment = this.sentiment(title);
+        const total = sentiment.reduce((s, g) => s + g.total, 0);
+        if (!m)
+            return { m, total, rows: sentiment.sort((a, b) => b.total - a.total) };
+        const rows = m.namedLangs.map(l => ({ name: l.language, count: l.count, share: l.share, supported: l.supported, counts: {}, total: 0 }));
+        sentiment.forEach(g => {
+            const key = TitleSection.langKey(g.name);
+            let row = rows.find(r => TitleSection.langKey(r.name) === key);
+            if (!row) {
+                const same = rows.filter(r => TitleSection.baseKey(r.name) === TitleSection.baseKey(g.name));
+                row = same.length === 1 ? same[0] : null;
+            }
+            if (row) {
+                Object.keys(g.counts).forEach(k => { row.counts[k] = (row.counts[k] || 0) + g.counts[k]; });
+                row.total += g.total;
+            }
+            else
+                rows.push({ name: g.name, count: null, share: null, supported: null, counts: g.counts, total: g.total, unlisted: true });
+        });
+        const keep = r => r.unlisted || r.total > 0 || r.share >= Config.titleLangMin;
+        const folded = rows.filter(r => !keep(r));
+        const sourceOther = m.activeLangs.filter(l => !m.namedLangs.includes(l));
+        const otherCount = [...folded, ...sourceOther].reduce((s, r) => s + r.count, 0);
+        const shown = rows.filter(keep).sort((a, b) => (a.unlisted - b.unlisted) || ((b.count || 0) - (a.count || 0)) || (b.total - a.total));
+        if (otherCount > 0)
+            shown.push({
+                name: Regions.OTHER, other: true, count: otherCount, share: m.share(otherCount), supported: null, counts: {}, total: 0,
+                detail: [folded.length ? `${Fmt.int(folded.length)} under ${Config.titleLangMin}%` : '', sourceOther.length ? 'grouped by the source' : ''].filter(Boolean).join(', plus '),
+            });
+        return { m, total, rows: shown, hasOther: otherCount > 0 };
     }
     block(title) {
         const { statusDefs } = this.ctx;
-        const { m, total, rows } = this.rows(title);
+        const { m, total, rows, hasOther } = this.rows(title);
         const top = rows[0];
-        const sentTop = [...rows].sort((a, b) => b.total - a.total)[0];
-        let headline;
-        if (m && top)
-            headline = `${top.name} holds ${Fmt.pct(top.share)} of all reviews${total ? ` and ${Fmt.int(top.total)} of ${Fmt.int(total)} player sentiment reviews` : ''}`;
+        const reviews = n => `${Fmt.int(n)} player sentiment ${n === 1 ? 'review' : 'reviews'}`;
+        const headline = m && top
+            ? `${top.name} holds ${Fmt.pct(top.share)} of all reviews${total ? ` and ${Fmt.int(top.total)} of ${reviews(total)}` : ''}`
+            : top ? `${reviews(total)}, most in ${top.name}` : reviews(total);
+        let kicker;
+        if (m) {
+            const gap = m.hasSupport ? m.namedLangs.find(l => l.supported === false) : null;
+            kicker = `${Fmt.int(m.total)} reviews in all${m.meta.fetched ? ` (fetched ${m.meta.fetched})` : ''}, ${reviews(total)}.${gap ? ` Largest language without support: ${gap.language}, ${Fmt.share(gap.share)} of reviews.` : ''}`;
+        }
         else
-            headline = `${Fmt.int(total)} player sentiment ${total === 1 ? 'review' : 'reviews'}, most from ${sentTop.name}`;
-        const kicker = m
-            ? `${Fmt.int(m.total)} reviews in all${m.meta.fetched ? ` (fetched ${m.meta.fetched})` : ''}, ${Fmt.int(total)} player sentiment ${total === 1 ? 'review' : 'reviews'}.`
-            : 'No review count table entered for this title, so only its player sentiment reviews are shown.';
+            kicker = 'No review count table entered for this title, so only its player sentiment reviews are shown.';
+        const support = !!(m && m.hasSupport);
+        const flag = v => (v === true ? '<span class="loc-yes">Yes</span>' : v === false ? '<span class="loc-no">No</span>' : '');
         const cell = (v, tone) => `<td class="num"><span class="cell-count tone-${tone}${v ? '' : ' zero'}">${Fmt.int(v)}</span></td>`;
+        const allCells = r => (r.unlisted
+            ? `<td class="num zero-text" colspan="2">${hasOther ? 'in Other' : 'not listed'}</td>`
+            : `<td class="num">${Fmt.int(r.count)}</td><td class="num share">${Fmt.share(r.share)}</td>`);
         const body = rows.map(r => `
-        <tr>
-          <td class="rs-name">${esc(r.name)}</td>
-          ${m ? `<td class="num${r.count ? '' : ' zero-text'}">${Fmt.int(r.count)}</td><td class="num share">${Fmt.share(r.share)}</td>` : ''}
+        <tr class="${r.other ? 'other-row' : ''}">
+          <td class="rs-name">${esc(r.name)}${r.detail ? `<small>${esc(r.detail)}</small>` : ''}</td>
+          ${support ? `<td class="num">${flag(r.supported)}</td>` : ''}
+          ${m ? allCells(r) : ''}
           <td class="rs-bar">${r.total ? Ui.miniSentiment(r.counts, statusDefs) : ''}</td>
           ${statusDefs.map(s => cell(Text.num(r.counts[s.key]), s.tone)).join('')}
         </tr>`).join('');
         const th = (label, cls, num = false) => `<th class="${cls}${num ? ' num' : ''}">${esc(label)}</th>`;
-        const head = th('Region', 'c-region')
+        const head = th('Language', 'c-lang')
+            + (support ? th('Supported', 'c-sup', true) : '')
             + (m ? th('All reviews', 'c-all', true) + th('Share', 'c-share', true) : '')
-            + th('Sentiment split', 'c-split')
+            + th(m ? 'Split' : 'Sentiment split', 'c-split')
             + statusDefs.map(s => th(s.label, 'c-status', true)).join('');
-        return Ui.block(`<h3 class="title-name">${esc(title)}</h3>` + Ui.chartHead(headline, kicker) + Ui.legend(statusDefs) + Ui.table(head, body, `title-regions${m ? '' : ' no-table'}`));
+        const cls = `title-langs${m ? '' : ' no-table'}${support ? ' with-support' : ''}`;
+        return Ui.block(`<h3 class="title-name">${esc(title)}</h3>` + Ui.chartHead(headline, kicker) + Ui.legend(statusDefs) + Ui.table(head, body, cls), { splittable: rows.length > 14 });
     }
     renderBody() {
         const { reviews } = this.ctx;
@@ -2279,21 +2329,35 @@ class RegionSection extends Section {
 class LanguageDistributionSection extends Section {
     static OTHER = MarketTable.OTHER;
     get eyebrow() { return 'Aggregate distribution'; }
-    get title() { return `All ${Fmt.int(this.ctx.market.total)} reviews, [[by language]]`; }
+    /** Several titles with their own tables: one distribution per title instead of one added-up list. */
+    get perTitle() { return !this.ctx.filtered && this.ctx.products.length > 1 && this.ctx.titleMarkets.size > 0; }
+    titles() { return this.ctx.products.filter(t => this.ctx.titleMarkets.has(t)); }
+    get title() { return this.perTitle ? 'Every review [[by language]], per title' : `All ${Fmt.int(this.ctx.market.total)} reviews, [[by language]]`; }
     get howToRead() {
+        if (this.perTitle) {
+            const support = this.titles().some(t => this.ctx.titleMarkets.get(t).hasSupport);
+            return `One list per title, from that title's own review counts, largest language first. Bars are scaled to each title's largest language.${support ? ' The Localized column shows whether that title supports the language.' : ''}`;
+        }
         const m = this.ctx.market;
         return `Every review language, largest first. Bars are scaled to ${m.langs[0].language}.${m.hasSupport ? ' The Localized column shows whether the game supports the language.' : ''}`;
     }
-    isAvailable() { return !!this.ctx.market; }
+    isAvailable() { return !!this.ctx.market || this.perTitle; }
     /** Largest first, labels exactly as typed; an "Other" bucket always sits last. */
-    rows() {
+    rows(m = this.ctx.market) {
         const isOther = l => LanguageDistributionSection.OTHER.test(l.language.trim());
-        const langs = this.ctx.market.langs;
-        return [...langs.filter(l => !isOther(l)), ...langs.filter(isOther)];
+        return [...m.langs.filter(l => !isOther(l)), ...m.langs.filter(isOther)];
     }
     renderBody() {
-        const m = this.ctx.market;
-        const rows = this.rows();
+        if (!this.perTitle)
+            return this.distribution(this.ctx.market, this.ctx.marketScope);
+        const titles = this.titles();
+        const missing = this.ctx.products.filter(t => !this.ctx.titleMarkets.has(t));
+        return titles.map(t => this.distribution(this.ctx.titleMarkets.get(t), this.ctx.scopeFor(t), t)).join('')
+            + (missing.length ? Ui.note(`No review count table entered for ${Words.list(missing)}.`) : '');
+    }
+    /** One language distribution table, with its scope and source notes. A title name heads it in per-title mode. */
+    distribution(m, scope, title = '') {
+        const rows = this.rows(m);
         const max = Math.max(...rows.map(l => l.count), 1); // the biggest language fills its whole track
         const loc = l => (l.supported === true ? '<span class="loc-yes">Yes</span>' : l.supported === false ? '<span class="loc-no">No</span>' : l.mixed ? '<span class="loc-no">Some titles</span>' : '');
         const body = rows.map(l => `
@@ -2307,20 +2371,21 @@ class LanguageDistributionSection extends Section {
         const th = (label, cls, num = false) => `<th class="${cls}${num ? ' num' : ''}">${esc(label)}</th>`;
         const head = th('Language', 'c-lang') + (m.hasSupport ? th('Localized', 'c-loc') : '') + th('Distribution', 'c-dist') + th('Reviews', 'c-rev', true) + th('Share', 'c-share', true);
         const notes = [
-            this.ctx.marketScope ? `Scope: ${this.ctx.marketScope}.` : '',
+            scope ? `Scope: ${scope}.` : '',
             m.meta.source ? `Source: ${m.meta.source}.` : '',
             ...m.reconciliation(),
         ];
-        return [
-            Ui.block(Ui.table(head, body, 'distribution'), { splittable: true }),
+        return `<div class="dist-group">${[
+            Ui.block((title ? `<h3 class="title-name">${esc(title)}</h3>` : '') + Ui.table(head, body, 'distribution'), { splittable: true }),
             notes.filter(Boolean).map(Ui.note).join(''),
-        ].join('');
+        ].join('')}</div>`;
     }
 }
 // ------------------------------------------------------------
 // 8. Coverage tiers: cumulative reach, largest languages first.
 // ------------------------------------------------------------
 class CoverageSection extends Section {
+    static MAX_LANGS = 8;
     get eyebrow() { return 'Coverage'; }
     get title() { return 'How far each [[language tier]] reaches'; }
     get howToRead() {
@@ -2334,10 +2399,14 @@ class CoverageSection extends Section {
         const { tiers, rest, restShare } = this.data();
         const cards = tiers.map((t, i) => {
             const gaps = t.langs.filter(l => l.supported === false);
-            const langs = t.langs.map(l => `<li class="${l.supported === false ? 'gap' : ''}">${esc(l.language)}<small>${l.supported === false ? 'Not supported' : Fmt.share(l.share)}</small></li>`).join('');
+            // Long lists (a full Steam table has up to 30 languages) are capped so a card fits on one page.
+            const shown = t.langs.slice(0, CoverageSection.MAX_LANGS);
+            const more = t.langs.length - shown.length;
+            const langs = shown.map(l => `<li class="${l.supported === false ? 'gap' : ''}">${esc(l.language)}<small>${l.supported === false ? 'Not supported' : Fmt.share(l.share)}</small></li>`).join('')
+                + (more ? `<li class="more">and ${Words.count(more, 'more language')}</li>` : '');
             const note = [
                 `${Words.count(t.langs.length, 'language', true)}, ${Fmt.int(t.count)} reviews${i ? `, adding ${Fmt.pct(t.added)} points` : ''}.`,
-                m.hasSupport ? (gaps.length ? ` Not yet supported: ${Words.list(gaps.map(l => l.language))}.` : ' All supported.') : '',
+                m.hasSupport ? (!gaps.length ? ' All supported.' : gaps.length <= 4 ? ` Not yet supported: ${Words.list(gaps.map(l => l.language))}.` : gaps.length === t.langs.length ? ' None of them is supported yet.' : ` ${Fmt.int(gaps.length)} of them are not yet supported.`) : '',
             ].join('');
             return `<div class="tier${i === 0 ? ' highlight' : ''}">
           <div class="tier-label">${esc(t.label)} · ${esc(t.name)}</div>
@@ -2900,6 +2969,164 @@ class PublisherBook {
         catch (_) { }
     }
 }
+/* ===== steam.js ===== */
+/* ============================================================
+   Steam review counts per language, fetched on a Steam page.
+
+   Steam's reviews API only answers pages on Steam's own sites, so
+   the generator cannot ask it directly. Instead "Fetch from Steam"
+   opens the game's store page, and the Allcorrect Steam counts
+   bookmark (this function, installed once from Step 03) runs there:
+   it counts every review in each of Steam's 30 languages, reads the
+   store page's supported languages, and sends the table back to the
+   generator tab, which pastes it into the right Step 03 box. With
+   no generator tab to send to, it copies the table instead.
+   The function must stay self-contained: it runs on Steam's page.
+   ============================================================ */
+function allcorrectSteamCounts() {
+    'use strict';
+    var PANEL = 'allcorrect-steam-counts';
+    var old = document.getElementById(PANEL);
+    if (old) { old.remove(); return; }
+    if (!/(^|\.)steampowered\.com$/.test(location.hostname)) {
+        alert('Open the game\'s Steam store page first, then click the Allcorrect Steam counts bookmark there.');
+        return;
+    }
+    var found = String(location.href).match(/\/app\/(\d+)/) || String(location.hash).match(/allcorrect=(\d+)/);
+    var appid = found ? found[1] : String(prompt('Steam App ID of the game') || '').replace(/\D/g, '');
+    if (!appid) return;
+    var LANGS = [['english', 'English'], ['russian', 'Russian'], ['schinese', 'Chinese (Simplified)'], ['tchinese', 'Chinese (Traditional)'],
+        ['german', 'German'], ['french', 'French'], ['spanish', 'Spanish (Spain)'], ['latam', 'Spanish (Latin America)'],
+        ['brazilian', 'Portuguese (Brazil)'], ['portuguese', 'Portuguese (Portugal)'], ['italian', 'Italian'], ['polish', 'Polish'],
+        ['turkish', 'Turkish'], ['japanese', 'Japanese'], ['koreana', 'Korean'], ['ukrainian', 'Ukrainian'], ['czech', 'Czech'],
+        ['hungarian', 'Hungarian'], ['romanian', 'Romanian'], ['bulgarian', 'Bulgarian'], ['dutch', 'Dutch'], ['greek', 'Greek'],
+        ['swedish', 'Swedish'], ['danish', 'Danish'], ['norwegian', 'Norwegian'], ['finnish', 'Finnish'], ['thai', 'Thai'],
+        ['vietnamese', 'Vietnamese'], ['indonesian', 'Indonesian'], ['arabic', 'Arabic']];
+    /* Store-page language names (lower case, letters only) -> Steam language codes. */
+    var STORE = { 'english': 'english', 'russian': 'russian', 'simplified chinese': 'schinese', 'traditional chinese': 'tchinese',
+        'german': 'german', 'french': 'french', 'spanish spain': 'spanish', 'spanish': 'spanish', 'spanish latin america': 'latam',
+        'portuguese brazil': 'brazilian', 'portuguese portugal': 'portuguese', 'portuguese': 'portuguese', 'italian': 'italian',
+        'polish': 'polish', 'turkish': 'turkish', 'japanese': 'japanese', 'korean': 'koreana', 'ukrainian': 'ukrainian',
+        'czech': 'czech', 'hungarian': 'hungarian', 'romanian': 'romanian', 'bulgarian': 'bulgarian', 'dutch': 'dutch',
+        'greek': 'greek', 'swedish': 'swedish', 'danish': 'danish', 'norwegian': 'norwegian', 'finnish': 'finnish',
+        'thai': 'thai', 'vietnamese': 'vietnamese', 'indonesian': 'indonesian', 'arabic': 'arabic' };
+    var host = document.createElement('div');
+    host.id = PANEL;
+    host.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;width:min(420px,calc(100vw - 32px));padding:16px 18px;border-radius:12px;background:#16181d;color:#e8eaee;border:1px solid #3a3f4a;box-shadow:0 18px 50px rgba(0,0,0,.55);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;text-align:left';
+    host.innerHTML = '<div style="font-weight:700;margin-bottom:6px">Allcorrect Steam counts</div><div data-s></div><div style="height:4px;margin-top:10px;background:#2a2f38;border-radius:2px;overflow:hidden"><i data-p style="display:block;height:100%;width:0;background:#4a8eff"></i></div>';
+    document.documentElement.appendChild(host);
+    var say = function (t) { host.querySelector('[data-s]').textContent = t; };
+    var bar = function (n, of) { host.querySelector('[data-p]').style.width = Math.round(n / of * 100) + '%'; };
+    var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+    async function count(lang) {
+        var input = { appid: Number(appid), languages: [lang], filter: 1, review_type: 0, purchase_type: 1, num_per_page: 1, cursor: '*', filter_offtopic_activity: false };
+        var url = 'https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/?input_json=' + encodeURIComponent(JSON.stringify(input));
+        for (var attempt = 0; attempt < 6; attempt++) {
+            var res = null;
+            try { res = await fetch(url, { credentials: 'omit', cache: 'no-store' }); } catch (e) { res = null; }
+            if (res && res.ok) {
+                var data = await res.json();
+                var q = data && data.response && data.response.query_summary;
+                if (q && typeof q.total_reviews === 'number') return q.total_reviews;
+                throw new Error('Steam sent no review total for ' + lang + '.');
+            }
+            if (res && !(res.status === 429 || res.status === 403 || res.status >= 500)) throw new Error('Steam answered HTTP ' + res.status + '.');
+            var pause = Math.min(4000 * Math.pow(2, attempt), 60000);
+            say('Steam asked us to slow down. Waiting ' + Math.round(pause / 1000) + ' s...');
+            await wait(pause);
+        }
+        throw new Error('Steam kept refusing; try again in a few minutes.');
+    }
+    async function store() {
+        var out = { name: '', langs: null };
+        var t = document.title.match(/^(?:Save \d+% on )?(.+?) on Steam$/);
+        if (t) out.name = t[1];
+        if (location.hostname !== 'store.steampowered.com') return out;
+        try {
+            var res = await fetch('/api/appdetails?appids=' + appid + '&l=english');
+            var json = await res.json();
+            var d = json && json[appid] && json[appid].success && json[appid].data;
+            if (!d) return out;
+            out.name = d.name || out.name;
+            out.langs = {};
+            String(d.supported_languages || '').split(/<br\s*\/?>/i)[0].split(',').forEach(function (part) {
+                var div = document.createElement('div');
+                div.innerHTML = part;
+                var name = (div.textContent || '').replace(/\*/g, '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+                if (STORE[name]) out.langs[STORE[name]] = true;
+            });
+        } catch (e) { out.langs = null; }
+        return out;
+    }
+    (async function () {
+        try {
+            var steps = LANGS.length + 2, done = 0;
+            say('Counting all reviews...');
+            var all = await count('all');
+            bar(++done, steps);
+            var counts = {};
+            for (var i = 0; i < LANGS.length; i++) {
+                await wait(650 + Math.random() * 500);
+                say('Counting ' + LANGS[i][1] + ' (' + (i + 1) + ' of ' + LANGS.length + ')...');
+                counts[LANGS[i][0]] = await count(LANGS[i][0]);
+                bar(++done, steps);
+            }
+            say('Reading the store page languages...');
+            var info = await store();
+            bar(steps, steps);
+            var sum = 0;
+            LANGS.forEach(function (l) { sum += counts[l[0]]; });
+            var total = Math.max(all, sum);
+            var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+            var now = new Date();
+            var pct = function (n) { return total ? (n / total * 100).toFixed(1) : '0.0'; };
+            var lines = ['App ID\t' + appid];
+            if (info.name) lines.push('Game\t' + info.name);
+            lines.push('Fetched\t' + now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()));
+            lines.push('Source\tSteam Web API GetAppReviews, all reviews incl. review-bomb periods');
+            lines.push('', 'Language\tReviews\t% of total\tSupported');
+            LANGS.slice().sort(function (a, b) { return counts[b[0]] - counts[a[0]]; }).forEach(function (l) {
+                var supported = info.langs ? (info.langs[l[0]] ? 'Yes' : 'No') : '';
+                if (counts[l[0]] > 0 || supported === 'Yes')
+                    lines.push(l[1] + '\t' + counts[l[0]] + '\t' + pct(counts[l[0]]) + '\t' + supported);
+            });
+            if (all > sum) lines.push('Other languages\t' + (all - sum) + '\t' + pct(all - sum) + '\t');
+            lines.push('Total\t' + total + '\t100.0\t');
+            var tsv = lines.join('\n');
+            var game = info.name || ('App ' + appid);
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage({ type: 'allcorrect-steam-counts', appid: appid, tsv: tsv }, '*');
+                say(game + ': ' + total.toLocaleString('en-US') + ' reviews sent to the report generator. You can close this tab.');
+                return;
+            }
+            var copied = false;
+            try { await navigator.clipboard.writeText(tsv); copied = true; } catch (e) { copied = false; }
+            say(game + ': ' + total.toLocaleString('en-US') + ' reviews. ' + (copied ? 'Copied: paste it into the Step 03 box.' : 'Copy the table below into the Step 03 box.'));
+            var box = document.createElement('textarea');
+            box.value = tsv;
+            box.readOnly = true;
+            box.style.cssText = 'display:block;width:100%;height:140px;margin-top:10px;background:#0f1115;color:#e8eaee;border:1px solid #3a3f4a;border-radius:6px;font:12px ui-monospace,Menlo,monospace';
+            host.appendChild(box);
+        } catch (err) {
+            say('Stopped: ' + (err && err.message ? err.message : err));
+        }
+    })();
+}
+/** The generator side of the Steam fetch: install link, opening Steam, receiving the table. */
+class SteamFetch {
+    static ORIGIN = /^https:\/\/(store|api)\.steampowered\.com$/;
+    static bookmarkletHref() { return 'javascript:' + encodeURIComponent(`(${allcorrectSteamCounts.toString()})()`); }
+    /** Opens (or reuses) one Steam tab. The tab keeps a link back to this one, which the bookmark uses to send the counts. */
+    static open(appId) { window.open(`https://store.steampowered.com/app/${encodeURIComponent(appId)}/`, 'allcorrect-steam'); }
+    static listen(onTable) {
+        window.addEventListener('message', e => {
+            const d = e.data;
+            if (!SteamFetch.ORIGIN.test(e.origin) || !d || d.type !== 'allcorrect-steam-counts' || typeof d.tsv !== 'string')
+                return;
+            onTable(String(d.appid || '').replace(/\D/g, ''), d.tsv);
+        });
+    }
+}
 class ReportForm {
     static FIELD_IDS = [
         'gameTitle', 'publisher', 'platform', 'productFilter',
@@ -2918,7 +3145,24 @@ class ReportForm {
         });
         f.periodTo.value = Dates.todayISO();
         this.marketNote = document.getElementById('marketNote');
-        f.marketTable.addEventListener('input', () => this.describeMarket());
+        f.marketTable.addEventListener('input', () => { this.fromSteam = false; this.describeMarket(); });
+        this.singleSteamBtn = document.getElementById('singleSteamBtn');
+        if (this.singleSteamBtn)
+            this.singleSteamBtn.addEventListener('click', () => {
+                SteamFetch.open(this.singleAppId);
+                this.marketNote.textContent = 'Steam is open in a new tab. Click the Allcorrect Steam counts bookmark there; the counts arrive here in about 30 seconds.';
+                this.marketNote.className = 'field-note';
+            });
+        const install = document.getElementById('steamBookmarklet');
+        if (install) {
+            install.href = SteamFetch.bookmarkletHref();
+            install.addEventListener('click', e => {
+                e.preventDefault();
+                const tip = document.getElementById('steamInstallNote');
+                if (tip)
+                    tip.textContent = 'Drag the button to your bookmarks bar (Cmd+Shift+B or Ctrl+Shift+B shows it). It only works on a Steam page.';
+            });
+        }
         this.priceNote = document.getElementById('priceNote');
         f.priceTable.addEventListener('input', () => this.describePrices());
         this.titleBox = document.getElementById('marketTitles');
@@ -2941,14 +3185,21 @@ class ReportForm {
         this.singleBox.hidden = multi;
         this.titleBox.innerHTML = multi ? titles.map((t, i) => `
       <div class="field span2 title-market">
-        <label for="f-market-${i}">${esc(t.title)}${t.appId ? ` <span class="label-aside">App ID ${esc(t.appId)}</span>` : ''}</label>
+        <div class="title-market-head">
+          <label for="f-market-${i}">${esc(t.title)}${t.appId ? ` <span class="label-aside">App ID ${esc(t.appId)}</span>` : ''}</label>
+          ${t.appId ? `<button type="button" class="steam-btn" data-app="${esc(t.appId)}">Fetch from Steam</button>` : ''}
+        </div>
         <textarea id="f-market-${i}" rows="8" spellcheck="false" placeholder="Paste the review counts for ${esc(t.title)}"></textarea>
         <div class="field-note" aria-live="polite"></div>
       </div>`).join('') : '';
         this.titleFields = multi ? titles.map((t, i) => {
-            const box = { title: t.title, appId: t.appId, input: document.getElementById(`f-market-${i}`), note: this.titleBox.children[i].querySelector('.field-note') };
+            const el = this.titleBox.children[i];
+            const box = { title: t.title, appId: t.appId, input: document.getElementById(`f-market-${i}`), note: el.querySelector('.field-note') };
             box.input.value = kept.get(t.title) || '';
-            box.input.addEventListener('input', () => { this.describeTitle(box); this.describePrices(); });
+            box.input.addEventListener('input', () => { box.fromSteam = false; this.describeTitle(box); this.describePrices(); });
+            const btn = el.querySelector('.steam-btn');
+            if (btn)
+                btn.addEventListener('click', () => this.fetchSteam(box));
             return box;
         }) : [];
         // A table pasted in the single box before the workbook was loaded moves to its title's box.
@@ -2960,6 +3211,38 @@ class ReportForm {
         }
         this.titleFields.forEach(b => this.describeTitle(b));
         this.describePrices();
+        // Single-title workbook: the one box can fetch from Steam too.
+        this.singleAppId = !multi && titles[0] ? titles[0].appId : '';
+        if (this.singleSteamBtn) {
+            this.singleSteamBtn.hidden = !this.singleAppId;
+            this.singleSteamBtn.dataset.app = this.singleAppId;
+        }
+    }
+    /** Opens the title's Steam page; the counts come back through receiveSteam(). */
+    fetchSteam(box) {
+        SteamFetch.open(box.appId);
+        box.note.textContent = `Steam is open in a new tab. Click the Allcorrect Steam counts bookmark there; ${box.title}'s counts arrive here in about 30 seconds.`;
+        box.note.className = 'field-note';
+    }
+    /** A table sent back by the Steam bookmark: into the box for that App ID, or the single box. */
+    receiveSteam(appId, tsv) {
+        const box = this.titleFields.find(b => b.appId === appId)
+            || (this.perTitle ? this.titleFields.find(b => { const hit = TitleMatch.find(MarketTable.parse(tsv).meta, this.titles); return hit && hit.title === b.title; }) : null);
+        if (box) {
+            box.input.value = tsv;
+            box.fromSteam = true;
+            this.describeTitle(box);
+            this.describePrices();
+            return box.title;
+        }
+        if (!this.perTitle) {
+            this.fields.marketTable.value = tsv;
+            this.fromSteam = true;
+            this.describeMarket();
+            this.describePrices();
+            return this.fields.gameTitle.value || `App ID ${appId}`;
+        }
+        return '';
     }
     get perTitle() { return this.titleFields.length > 0; }
     hasMarketText() { return this.perTitle ? this.titleFields.some(b => b.input.value.trim()) : !!this.fields.marketTable.value.trim(); }
@@ -2984,7 +3267,7 @@ class ReportForm {
             issues.unshift(`This table looks like it is for ${hit.title}, not ${box.title}.`);
         else if (parsed.meta.appId && box.appId && Text.digits(parsed.meta.appId) !== box.appId)
             issues.unshift(`This table is for App ID ${parsed.meta.appId}, but this title's reviews link to App ID ${box.appId}.`);
-        box.note.textContent = table.describe() + (issues.length ? ' ' + issues.join(' ') : '');
+        box.note.textContent = (box.fromSteam ? 'Filled from Steam. ' : '') + table.describe() + (issues.length ? ' ' + issues.join(' ') : '');
         box.note.className = 'field-note ' + (issues.length ? 'warn' : 'ok');
     }
     /** Live feedback under the Step 03 box: what the parser understood. */
@@ -3032,7 +3315,7 @@ class ReportForm {
         }
         else {
             const issues = table.reconciliation();
-            this.marketNote.textContent = table.describe() + (issues.length ? ' ' + issues.join(' ') : '');
+            this.marketNote.textContent = (this.fromSteam ? 'Filled from Steam. ' : '') + table.describe() + (issues.length ? ' ' + issues.join(' ') : '');
             this.marketNote.className = 'field-note ' + (issues.length ? 'warn' : 'ok');
         }
     }
@@ -3105,6 +3388,10 @@ class App {
         this.form = new ReportForm();
         this.printer = new PrintController();
         this.form.init();
+        SteamFetch.listen((appId, tsv) => {
+            const where = this.form.receiveSteam(appId, tsv);
+            this.status.set(where ? `Steam review counts for ${where} arrived and were placed in Step 03.` : `Steam review counts for App ID ${appId} arrived, but no title in this workbook matches it.`, where ? 'ok' : 'warn');
+        });
         this.form.fields.productFilter.addEventListener('change', () => {
             const meta = this.dataset && this.dataset.metadata;
             if (!meta)

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261120d">
+  <link rel="stylesheet" href="styles.css?v=20261120l">
 </head>
 <body>
 
@@ -104,10 +104,17 @@
       </div>
       <p class="hint">Paste the total review counts straight from a spreadsheet or export. When the workbook holds several titles, one box appears per title; paste each title's own table into its box, and the report shows each title's counts next to its player sentiment. Tables with Region, Language, Reviews and Supported columns are read automatically, along with metadata lines (Game, App ID, Fetched, Source), a Total row and a second region summary. Simple lines such as "English, 1724" also work. Shares are always recalculated from the counts. This box drives the region chart, the language distribution, the coverage tiers and the related takeaways.</p>
     </div>
+    <div class="steam-install">
+      <a class="bookmarklet" id="steamBookmarklet" href="#" title="Drag me to your bookmarks bar">Allcorrect Steam counts</a>
+      <p class="hint" id="steamInstallNote">Steam games: drag this button to your bookmarks bar once. Then "Fetch from Steam" opens the game's store page; click the bookmark there and every review is counted per language, with the store page's supported languages, and placed in the right box below (about 30 seconds per game). Steam only lets its own pages read these counts, which is why the bookmark runs there.</p>
+    </div>
     <div class="field-grid" id="marketTitles" hidden></div>
     <div class="field-grid" id="marketSingle">
       <div class="field span2">
-        <label for="f-marketTable">Review counts</label>
+        <div class="title-market-head">
+          <label for="f-marketTable">Review counts</label>
+          <button type="button" class="steam-btn" id="singleSteamBtn" hidden>Fetch from Steam</button>
+        </div>
         <textarea id="f-marketTable" rows="10" spellcheck="false" placeholder="Region&#9;Language&#9;Reviews&#9;Supported&#10;English (global)&#9;English&#9;1375&#9;Yes&#10;Western &amp; Southern Europe&#9;German&#9;1083&#9;Yes&#10;Greater China&#9;Chinese (Simplified)&#9;428&#9;Yes"></textarea>
         <div class="field-note" id="marketNote" aria-live="polite"></div>
       </div>
@@ -142,6 +149,6 @@
   <div id="report"></div>
 </div>
 
-  <script src="app.js?v=20261120d"></script>
+  <script src="app.js?v=20261120l"></script>
 </body>
 </html>

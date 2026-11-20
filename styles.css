@@ -368,6 +368,24 @@ input[type="file"]{ display:none; }
 /* Step 03 per title: the game title sits above its box, in normal case */
 .title-market label{ font-size:14.5px; letter-spacing:0; text-transform:none; color:var(--text); }
 .label-aside{ margin-left:6px; font-size:12px; font-weight:500; color:var(--text-faint); }
+.title-market-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.steam-btn{ height:32px; padding:0 14px; font-size:12.5px; flex:none; }
+.steam-install{ display:flex; align-items:center; gap:16px; margin-top:18px; }
+.panel .steam-install p.hint{ margin:0; }
+.bookmarklet{
+  flex:none;
+  display:inline-flex;
+  align-items:center;
+  height:36px;
+  padding:0 16px;
+  border-radius:999px;
+  border:1px dashed var(--blue);
+  color:var(--blue);
+  font-size:13px;
+  font-weight:700;
+  text-decoration:none;
+  cursor:grab;
+}
 [hidden]{ display:none !important; }
 .field-note.warn{ color:var(--amber); }
 .panel-actions{
@@ -855,27 +873,33 @@ input[type="file"]{ display:none; }
 .tbl.region-sentiment td.rs-bar{ padding-right:var(--sp-4); }
 .tbl.region-sentiment td.rs-neg{ font-weight:600; color:var(--text-dim); }
 .tbl.region-sentiment .mini-sent{ height:10px; }
-/* Title by title: all-review counts beside player sentiment, per region */
+/* Title by title: all-review counts beside player sentiment, per language */
 .title-name{
   margin:0 0 var(--sp-2);
   font-family:var(--font-display);
   font-size:var(--fs-h3);
   font-weight:800;
   color:var(--blue);
+  break-after:avoid;
 }
-.tbl.title-regions{ table-layout:fixed; font-size:13.5px; }
-.tbl.title-regions thead th{ letter-spacing:.08em; }
-.tbl.title-regions th.c-region{ width:24%; }
-.tbl.title-regions th.c-all{ width:12%; }
-.tbl.title-regions th.c-share{ width:10%; }
-.tbl.title-regions th.c-split{ width:17%; }
-.tbl.title-regions.no-table th.c-region{ width:30%; }
-.tbl.title-regions.no-table th.c-split{ width:25%; }
-.tbl.title-regions td.rs-name{ font-weight:600; overflow-wrap:anywhere; }
-.tbl.title-regions td.rs-bar{ padding-left:var(--sp-3); padding-right:var(--sp-4); }
-.tbl.title-regions td.share{ font-weight:600; color:var(--blue); }
-.tbl.title-regions td.zero-text{ color:var(--text-faint); }
-.tbl.title-regions .mini-sent{ height:10px; }
+.tbl.title-langs{ table-layout:fixed; font-size:13.5px; }
+.tbl.title-langs thead th{ letter-spacing:.04em; }
+.tbl.title-langs th.c-lang{ width:22%; }
+.tbl.title-langs th.c-sup{ width:14%; }
+.tbl.title-langs th.c-all{ width:11%; }
+.tbl.title-langs th.c-share{ width:10%; }
+.tbl.title-langs th.c-split{ width:10%; }
+.tbl.title-langs:not(.with-support) th.c-lang{ width:27%; }
+.tbl.title-langs.no-table th.c-lang{ width:30%; }
+.tbl.title-langs.no-table th.c-split{ width:25%; }
+.tbl.title-langs td.rs-name{ font-weight:600; overflow-wrap:anywhere; }
+.tbl.title-langs td.rs-name small{ display:block; margin-top:2px; font-size:12px; font-weight:400; color:var(--text-faint); }
+.tbl.title-langs td.rs-bar{ padding-left:var(--sp-2); padding-right:var(--sp-2); }
+.tbl.title-langs td.share{ font-weight:600; color:var(--blue); }
+.tbl.title-langs td.zero-text{ color:var(--text-faint); font-size:12.5px; }
+.tbl.title-langs tr.other-row td{ color:var(--text-dim); }
+.tbl.title-langs .mini-sent{ height:10px; }
+.dist-group + .dist-group{ margin-top:var(--sp-5); }
 .tbl.breakdown td.lang small{
   display:block;
   margin-top:2px;
@@ -994,6 +1018,7 @@ input[type="file"]{ display:none; }
   font-variant-numeric:tabular-nums;
 }
 .tier-langs li.gap small{ color:var(--yellow); }
+.tier-langs li.more{ color:var(--text-faint); font-style:normal; }
 .tier-note{
   margin:auto 0 0;
   padding-top:18px;
@@ -1433,7 +1458,7 @@ input[type="file"]{ display:none; }
   .region-row{ padding:4px 0; }
   .block-sub{ margin-top:var(--sp-4) !important; padding-top:var(--sp-4); }
   .cell-count{ padding:1px 8px; }
-  .tbl.region-sentiment td,.tbl.title-regions td{ padding:3px var(--sp-2); }
+  .tbl.region-sentiment td,.tbl.title-langs td{ padding:3px var(--sp-2); }
   .tbl.breakdown td{ padding:4px var(--sp-2); }
   .tbl.distribution td{ padding:1px 0; font-size:13.5px; }
   .tbl.money td{ padding:3px var(--sp-2) 3px 0; }
@@ -1469,7 +1494,8 @@ input[type="file"]{ display:none; }
   .region-chart{ grid-template-columns:1fr; }
   .ml-row{ grid-template-columns:96px minmax(0,1fr) 92px; gap:8px; }
   .tbl.region-sentiment th:nth-child(2),.tbl.region-sentiment td.rs-bar{ display:none; }
-  .tbl.title-regions th.c-split,.tbl.title-regions td.rs-bar{ display:none; }
+  .tbl.title-langs th.c-split,.tbl.title-langs td.rs-bar{ display:none; }
+  .steam-install{ flex-direction:column; align-items:flex-start; }
   .ml-name{ font-size:12.5px; }
   .region-chart .donut{ max-width:240px; margin:0 auto; }
 }
