@@ -365,6 +365,10 @@ input[type="file"]{ display:none; }
   min-height:18px;
 }
 .field-note.ok{ color:var(--green); }
+/* Step 03 per title: the game title sits above its box, in normal case */
+.title-market label{ font-size:14.5px; letter-spacing:0; text-transform:none; color:var(--text); }
+.label-aside{ margin-left:6px; font-size:12px; font-weight:500; color:var(--text-faint); }
+[hidden]{ display:none !important; }
 .field-note.warn{ color:var(--amber); }
 .panel-actions{
   display:flex;
@@ -590,6 +594,7 @@ input[type="file"]{ display:none; }
   min-height:28px;
 }
 .bar-row.product{ --label-w:200px; }
+.bar-row .lang small{ display:block; font-size:12px; font-weight:400; color:var(--text-faint); }
 .bar-row .lang{ font-size:var(--fs-body); font-weight:500; overflow-wrap:anywhere; }
 .bar-row .total{
   font-size:var(--fs-small);
@@ -850,6 +855,27 @@ input[type="file"]{ display:none; }
 .tbl.region-sentiment td.rs-bar{ padding-right:var(--sp-4); }
 .tbl.region-sentiment td.rs-neg{ font-weight:600; color:var(--text-dim); }
 .tbl.region-sentiment .mini-sent{ height:10px; }
+/* Title by title: all-review counts beside player sentiment, per region */
+.title-name{
+  margin:0 0 var(--sp-2);
+  font-family:var(--font-display);
+  font-size:var(--fs-h3);
+  font-weight:800;
+  color:var(--blue);
+}
+.tbl.title-regions{ table-layout:fixed; font-size:13.5px; }
+.tbl.title-regions thead th{ letter-spacing:.08em; }
+.tbl.title-regions th.c-region{ width:24%; }
+.tbl.title-regions th.c-all{ width:12%; }
+.tbl.title-regions th.c-share{ width:10%; }
+.tbl.title-regions th.c-split{ width:17%; }
+.tbl.title-regions.no-table th.c-region{ width:30%; }
+.tbl.title-regions.no-table th.c-split{ width:25%; }
+.tbl.title-regions td.rs-name{ font-weight:600; overflow-wrap:anywhere; }
+.tbl.title-regions td.rs-bar{ padding-left:var(--sp-3); padding-right:var(--sp-4); }
+.tbl.title-regions td.share{ font-weight:600; color:var(--blue); }
+.tbl.title-regions td.zero-text{ color:var(--text-faint); }
+.tbl.title-regions .mini-sent{ height:10px; }
 .tbl.breakdown td.lang small{
   display:block;
   margin-top:2px;
@@ -1407,7 +1433,7 @@ input[type="file"]{ display:none; }
   .region-row{ padding:4px 0; }
   .block-sub{ margin-top:var(--sp-4) !important; padding-top:var(--sp-4); }
   .cell-count{ padding:1px 8px; }
-  .tbl.region-sentiment td{ padding:3px var(--sp-2); }
+  .tbl.region-sentiment td,.tbl.title-regions td{ padding:3px var(--sp-2); }
   .tbl.breakdown td{ padding:4px var(--sp-2); }
   .tbl.distribution td{ padding:1px 0; font-size:13.5px; }
   .tbl.money td{ padding:3px var(--sp-2) 3px 0; }
@@ -1443,6 +1469,7 @@ input[type="file"]{ display:none; }
   .region-chart{ grid-template-columns:1fr; }
   .ml-row{ grid-template-columns:96px minmax(0,1fr) 92px; gap:8px; }
   .tbl.region-sentiment th:nth-child(2),.tbl.region-sentiment td.rs-bar{ display:none; }
+  .tbl.title-regions th.c-split,.tbl.title-regions td.rs-bar{ display:none; }
   .ml-name{ font-size:12.5px; }
   .region-chart .donut{ max-width:240px; margin:0 auto; }
 }

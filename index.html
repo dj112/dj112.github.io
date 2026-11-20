@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261109j">
+  <link rel="stylesheet" href="styles.css?v=20261120d">
 </head>
 <body>
 
@@ -102,9 +102,10 @@
         <div class="step-label">Step 03 (optional)</div>
         <h2>All-review table: regions and languages</h2>
       </div>
-      <p class="hint">Paste the total review counts straight from a spreadsheet or export. Tables with Region, Language, Reviews and Supported columns are read automatically, along with metadata lines (Game, App ID, Fetched, Source), a Total row and a second region summary. Simple lines such as "English, 1724" also work. Shares are always recalculated from the counts. This box drives the region chart, the language distribution, the coverage tiers and the related takeaways.</p>
+      <p class="hint">Paste the total review counts straight from a spreadsheet or export. When the workbook holds several titles, one box appears per title; paste each title's own table into its box, and the report shows each title's counts next to its player sentiment. Tables with Region, Language, Reviews and Supported columns are read automatically, along with metadata lines (Game, App ID, Fetched, Source), a Total row and a second region summary. Simple lines such as "English, 1724" also work. Shares are always recalculated from the counts. This box drives the region chart, the language distribution, the coverage tiers and the related takeaways.</p>
     </div>
-    <div class="field-grid">
+    <div class="field-grid" id="marketTitles" hidden></div>
+    <div class="field-grid" id="marketSingle">
       <div class="field span2">
         <label for="f-marketTable">Review counts</label>
         <textarea id="f-marketTable" rows="10" spellcheck="false" placeholder="Region&#9;Language&#9;Reviews&#9;Supported&#10;English (global)&#9;English&#9;1375&#9;Yes&#10;Western &amp; Southern Europe&#9;German&#9;1083&#9;Yes&#10;Greater China&#9;Chinese (Simplified)&#9;428&#9;Yes"></textarea>
@@ -141,6 +142,6 @@
   <div id="report"></div>
 </div>
 
-  <script src="app.js?v=20261109j"></script>
+  <script src="app.js?v=20261120d"></script>
 </body>
 </html>

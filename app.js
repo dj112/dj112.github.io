@@ -492,16 +492,20 @@ class MarketTable {
     static YES = /^(yes|y|true|supported|localized|localised|full|full audio|text|interface|1|✓|✔|x)$/i;
     static NO = /^(no|n|false|unsupported|none|not supported|0|-)$/i;
     static TOTAL = /^(grand\s+)?totals?$|^all(\s+languages)?$|^sum$/i;
+    /** Catch-all rows: "Other", "Unknown", "17 other languages". */
+    static OTHER = /^(\d+\s+)?(other|others|unknown|unspecified)(\s+languages?)?$/i;
     constructor(parsed) {
         this.meta = parsed.meta;
         this.declaredTotal = parsed.declaredTotal;
         this.regionSummary = parsed.regionSummary;
         this.total = parsed.rows.reduce((sum, r) => sum + r.count, 0);
-        this.hasSupport = parsed.rows.some(r => r.supported !== null);
+        this.hasSupport = parsed.rows.some(r => r.supported !== null || r.mixed);
         this.langs = parsed.rows
             .map(r => ({ ...r, share: this.total ? r.count / this.total * 100 : 0 }))
             .sort((a, b) => (b.count - a.count) || (a.order - b.order));
         this.activeLangs = this.langs.filter(l => l.count > 0);
+        // Real languages only: a catch-all row such as "17 other languages" is not counted or ranked as one.
+        this.namedLangs = this.activeLangs.filter(l => !MarketTable.OTHER.test(l.language.trim()));
         const group = key => {
             const map = new Map();
             this.langs.forEach(l => {
@@ -519,7 +523,7 @@ class MarketTable {
                 .sort((a, b) => (b.count - a.count) || (a.order - b.order));
         };
         // Charts use the standard market regions, placed by language (Config.languageRegions).
-        this.regions = group(l => Regions.fromLanguage(l.language) || Regions.UNASSIGNED).filter(r => r.count > 0);
+        this.regions = group(l => Regions.fromLanguage(l.language) || (MarketTable.OTHER.test(l.language.trim()) ? Regions.OTHER : Regions.UNASSIGNED)).filter(r => r.count > 0);
         this.hasRegions = this.regions.length >= 2;
         // The pasted Region column, if any, is kept only to check the source's own subtotals.
         this.sourceRegions = group(l => l.region);
@@ -530,12 +534,41 @@ class MarketTable {
         const table = new MarketTable(parsed);
         return table.total ? table : null;
     }
+    /**
+     * Several titles' tables added up, language by language, for the report-wide sections.
+     * Catch-all rows merge into one "Other languages" row. A language is supported only when every
+     * table that lists it says so, unsupported only when every one says not; anything else is marked mixed.
+     */
+    static combine(tables) {
+        const rows = new Map();
+        tables.forEach(t => t.langs.forEach(l => {
+            const other = MarketTable.OTHER.test(l.language.trim());
+            const key = other ? '\u0000other' : Text.key(l.language);
+            if (!rows.has(key))
+                rows.set(key, { region: '', language: other ? 'Other languages' : l.language, count: 0, flags: [], order: rows.size });
+            const row = rows.get(key);
+            row.count += l.count;
+            row.flags.push(l.supported);
+        }));
+        const merged = [...rows.values()].map(({ flags, ...row }) => {
+            const all = v => flags.every(f => f === v);
+            const supported = all(true) ? true : all(false) ? false : null;
+            return { ...row, supported, mixed: supported === null && flags.some(f => f !== null) };
+        });
+        const sources = Lists.unique(tables.map(t => t.meta.source));
+        return MarketTable.from({
+            rows: merged,
+            meta: { source: sources.length === 1 ? sources[0] : '' },
+            declaredTotal: tables.every(t => t.declaredTotal) ? tables.reduce((s, t) => s + t.declaredTotal, 0) : null,
+            regionSummary: [],
+        });
+    }
     share(n) { return this.total ? n / this.total * 100 : 0; }
     get supported() { return this.activeLangs.filter(l => l.supported === true); }
     get unsupported() { return this.activeLangs.filter(l => l.supported === false); }
     /** Top languages, added largest first, until each cumulative threshold in Config.coverage is met. */
     tiers(defs = Config.coverage) {
-        const active = this.activeLangs;
+        const active = this.namedLangs;
         const tiers = [];
         let i = 0, reach = 0;
         defs.forEach(def => {
@@ -568,7 +601,8 @@ class MarketTable {
     }
     /** One line for the setup panel, so the person pasting sees what was understood. */
     describe() {
-        const bits = [`${Fmt.int(this.total)} reviews in ${Words.count(this.activeLangs.length, 'language')}`];
+        const other = this.activeLangs.length > this.namedLangs.length;
+        const bits = [`${Fmt.int(this.total)} reviews in ${Words.count(this.namedLangs.length, 'language')}${other ? ' plus an Other row' : ''}`];
         if (this.hasRegions)
             bits.push(`placed into ${Words.count(this.regions.length, 'market region')}`);
         if (this.hasSupport)
@@ -838,6 +872,8 @@ class PriceTable {
 /** Places reviews and languages into the standard market regions (Config.marketRegions). */
 class Regions {
     static UNASSIGNED = 'Unassigned';
+    /** The review count table's own catch-all row ("17 other languages"), kept apart from Unassigned. */
+    static OTHER = 'Other languages';
     static names() { return Config.marketRegions.map(r => r.name); }
     /** "Taiwan / HK" -> East Asia, "CIS" -> Russia & CIS. '' when the text names no known country ("Global"). */
     static fromCountry(text) {
@@ -877,18 +913,76 @@ class Regions {
         return Regions.fromLanguage(Regions.variant(language, country)) || Regions.fromCountry(country) || Regions.UNASSIGNED;
     }
 }
+/** Which workbook title a pasted table belongs to: by Steam App ID first, then by name. */
+class TitleMatch {
+    /** [{ title, appId }] for every title in the reviews; appId comes from the review links. */
+    static titles(reviews) {
+        return Lists.unique(reviews.map(r => r.product)).map(title => ({
+            title,
+            appId: Lists.mode(reviews.filter(r => r.product === title).map(r => WorkbookParser.steamAppId(r.link)).filter(Boolean)),
+        }));
+    }
+    static find(meta, titles) {
+        const id = Text.digits(meta.appId);
+        const byId = id && titles.find(t => t.appId === id);
+        if (byId)
+            return byId;
+        const game = Text.normalize(meta.game);
+        if (!game)
+            return null;
+        return titles.find(t => Text.normalize(t.title) === game)
+            || titles.find(t => { const k = Text.normalize(t.title); return k.includes(game) || game.includes(k); })
+            || null;
+    }
+}
 /** Everything a section needs, in one object. */
 class ReportContext {
-    constructor({ analysis, meta, reviews, market = null, marketScope = '', prices = null, filtered = false }) {
+    constructor({ analysis, meta, reviews, market = null, marketScope = '', prices = null, filtered = false, titleMarkets = [], allTitles = null }) {
         this.prices = PriceTable.from(prices);
         this.analysis = analysis;
         this.statusDefs = analysis.statusDefs;
         this.meta = meta;
         this.reviews = reviews;
         this.filtered = filtered;
-        this.market = MarketTable.from(market);
-        this.marketScope = marketScope || (this.market ? this.market.autoScope() : '');
         this.products = Lists.unique(reviews.map(r => r.product));
+        // Step 03 per title (multi-title workbooks): title -> its own all-review table.
+        this.titleMarkets = new Map();
+        titleMarkets.forEach(({ title, parsed }) => { const t = MarketTable.from(parsed); if (t) this.titleMarkets.set(title, t); });
+        if (this.titleMarkets.size) {
+            if (filtered) {
+                this.market = this.titleMarkets.get(this.products[0]) || null;
+                this.marketScope = this.market ? this.scopeFor(this.products[0]) : '';
+            }
+            else {
+                const entered = [...this.titleMarkets.keys()];
+                const missing = this.products.filter(t => !this.titleMarkets.has(t));
+                this.market = MarketTable.combine([...this.titleMarkets.values()]);
+                this.marketScope = (entered.length > 1 ? `${Words.count(entered.length, 'title', true)} added together: ` : '')
+                    + entered.map(t => this.scopeFor(t)).join('; ')
+                    + (missing.length ? `. No table entered for ${Words.list(missing)}` : '');
+            }
+        }
+        else {
+            this.market = MarketTable.from(market);
+            this.marketScope = marketScope || (this.market ? this.market.autoScope() : '');
+        }
+        // Prices are for one game. With per-title tables, the money lens uses that game's own table,
+        // and stays out of a single-title report for a different game.
+        this.priceMarket = this.market;
+        this.priceTitle = '';
+        if (this.prices && this.titleMarkets.size) {
+            // Match against every title in the workbook, so a report filtered to one title still spots prices for another.
+            const hit = TitleMatch.find(this.prices.meta, allTitles || TitleMatch.titles(reviews));
+            if (hit) {
+                this.priceTitle = hit.title;
+                this.priceMarket = filtered && hit.title !== this.products[0] ? null : (this.titleMarkets.get(hit.title) || null);
+            }
+        }
+    }
+    /** "Serious Sam HD (App ID 41000), fetched 2026-11-20 14:02", named as in the workbook. */
+    scopeFor(title) {
+        const m = this.titleMarkets.get(title).meta;
+        return [`${title}${m.appId ? ` (App ID ${m.appId})` : ''}`, m.fetched ? `fetched ${m.fetched}` : ''].filter(Boolean).join(', ');
     }
     /** Notes for the person generating the report. Shown in the status line, never in the PDF. */
     warnings() {
@@ -1520,7 +1614,7 @@ class VoiceSentimentSection extends Section {
 class ProductSection extends Section {
     get eyebrow() { return 'Across the line-up'; }
     get title() { return 'Where the [[player voice]] is loudest'; }
-    get howToRead() { return 'One bar per title, sized by player sentiment reviews and split by sentiment.'; }
+    get howToRead() { return `One bar per title, sized by player sentiment reviews and split by sentiment.${this.ctx.titleMarkets.size ? ' The line under each title gives its total review count from the review count table.' : ''}`; }
     isAvailable() { return !this.ctx.filtered && this.ctx.products.length > 1; }
     renderBody() {
         const { reviews, products, statusDefs } = this.ctx;
@@ -1530,11 +1624,73 @@ class ProductSection extends Section {
         const max = Math.max(...rows.map(r => r.total), 1);
         const body = rows.map(r => `
       <div class="bar-row product">
-        <div class="lang">${esc(r.name)}</div>
+        <div class="lang">${esc(r.name)}${this.ctx.titleMarkets.has(r.name) ? `<small>${Fmt.int(this.ctx.titleMarkets.get(r.name).total)} reviews in all</small>` : ''}</div>
         ${Ui.sentimentBar(r.counts, statusDefs, r.total, r.total / max * 100)}
         <div class="total">${Fmt.int(r.total)}</div>
       </div>`).join('');
         return Ui.block(Ui.chartHead(`${rows[0].name} draws the most player sentiment reviews: ${Fmt.int(rows[0].total)} of ${Fmt.int(reviews.length)}`) + Ui.legend(statusDefs) + `<div class="bar-rows">${body}</div>`, { splittable: true });
+    }
+}
+// ------------------------------------------------------------
+// Title by title (multi-title workbooks with a Step 03 table per title):
+// each title's all-review counts next to its player sentiment, by market region.
+// ------------------------------------------------------------
+class TitleSection extends Section {
+    get eyebrow() { return 'Title by title'; }
+    get title() { return 'All reviews and [[player sentiment]], per title'; }
+    get howToRead() { return "Each title's review counts from its own table sit next to its player sentiment reviews from the workbook, both grouped into the same market regions. Shares are of that title's reviews."; }
+    isAvailable() { return !this.ctx.filtered && this.ctx.products.length > 1 && this.ctx.titleMarkets.size > 0; }
+    /** Follows the line-up chart on the same page; each title block moves to the next page whole if it does not fit. */
+    get keepWithPrevious() { return true; }
+    /** One row per market region: all-review count and share from the table, sentiment counts from the workbook. */
+    rows(title) {
+        const m = this.ctx.titleMarkets.get(title);
+        const sentiment = SentimentAnalysis.fromReviews(this.ctx.reviews.filter(r => r.product === title));
+        const byName = new Map();
+        const row = name => {
+            if (!byName.has(name))
+                byName.set(name, { name, count: 0, share: 0, counts: {}, total: 0 });
+            return byName.get(name);
+        };
+        if (m)
+            m.regions.forEach(r => Object.assign(row(r.name), { count: r.count, share: r.share }));
+        sentiment.regionsByVolume.forEach(g => Object.assign(row(g.name), { counts: g.counts, total: g.total }));
+        const last = r => ([Regions.UNASSIGNED, Regions.OTHER].includes(r.name) ? 1 : 0);
+        return { m, total: sentiment.total, rows: [...byName.values()].sort((a, b) => last(a) - last(b) || (b.count - a.count) || (b.total - a.total)) };
+    }
+    block(title) {
+        const { statusDefs } = this.ctx;
+        const { m, total, rows } = this.rows(title);
+        const top = rows[0];
+        const sentTop = [...rows].sort((a, b) => b.total - a.total)[0];
+        let headline;
+        if (m && top)
+            headline = `${top.name} holds ${Fmt.pct(top.share)} of all reviews${total ? ` and ${Fmt.int(top.total)} of ${Fmt.int(total)} player sentiment reviews` : ''}`;
+        else
+            headline = `${Fmt.int(total)} player sentiment ${total === 1 ? 'review' : 'reviews'}, most from ${sentTop.name}`;
+        const kicker = m
+            ? `${Fmt.int(m.total)} reviews in all${m.meta.fetched ? ` (fetched ${m.meta.fetched})` : ''}, ${Fmt.int(total)} player sentiment ${total === 1 ? 'review' : 'reviews'}.`
+            : 'No review count table entered for this title, so only its player sentiment reviews are shown.';
+        const cell = (v, tone) => `<td class="num"><span class="cell-count tone-${tone}${v ? '' : ' zero'}">${Fmt.int(v)}</span></td>`;
+        const body = rows.map(r => `
+        <tr>
+          <td class="rs-name">${esc(r.name)}</td>
+          ${m ? `<td class="num${r.count ? '' : ' zero-text'}">${Fmt.int(r.count)}</td><td class="num share">${Fmt.share(r.share)}</td>` : ''}
+          <td class="rs-bar">${r.total ? Ui.miniSentiment(r.counts, statusDefs) : ''}</td>
+          ${statusDefs.map(s => cell(Text.num(r.counts[s.key]), s.tone)).join('')}
+        </tr>`).join('');
+        const th = (label, cls, num = false) => `<th class="${cls}${num ? ' num' : ''}">${esc(label)}</th>`;
+        const head = th('Region', 'c-region')
+            + (m ? th('All reviews', 'c-all', true) + th('Share', 'c-share', true) : '')
+            + th('Sentiment split', 'c-split')
+            + statusDefs.map(s => th(s.label, 'c-status', true)).join('');
+        return Ui.block(`<h3 class="title-name">${esc(title)}</h3>` + Ui.chartHead(headline, kicker) + Ui.legend(statusDefs) + Ui.table(head, body, `title-regions${m ? '' : ' no-table'}`));
+    }
+    renderBody() {
+        const { reviews } = this.ctx;
+        const count = t => reviews.filter(r => r.product === t).length;
+        const order = [...this.ctx.products].sort((a, b) => (this.ctx.titleMarkets.has(b) - this.ctx.titleMarkets.has(a)) || (count(b) - count(a)));
+        return order.map(t => this.block(t)).join('');
     }
 }
 // ------------------------------------------------------------
@@ -1976,7 +2132,7 @@ class Findings {
         if (!m)
             return null;
         const t1 = m.tiers().tiers[0];
-        if (!t1 || t1.langs.length >= m.activeLangs.length)
+        if (!t1 || t1.langs.length >= m.namedLangs.length)
             return null;
         const gaps = m.hasSupport ? t1.langs.filter(l => l.supported === false) : [];
         return {
@@ -2000,7 +2156,7 @@ class Findings {
             tag: 'Reach',
             fromTable: true,
             title: `${top.language} is the largest unsupported language: ${Fmt.share(top.share)} of reviews`,
-            body: `${Fmt.int(top.count)} reviews, ranking ${Words.ordinal(m.activeLangs.indexOf(top) + 1)} of ${m.activeLangs.length} review languages. All unsupported languages together hold ${Fmt.pct(share)}.`,
+            body: `${Fmt.int(top.count)} reviews, ranking ${Words.ordinal(m.namedLangs.indexOf(top) + 1)} of ${m.namedLangs.length} review languages. All unsupported languages together hold ${Fmt.pct(share)}.`,
         };
     }
     static quiet(ctx) {
@@ -2100,14 +2256,14 @@ class RegionSection extends Section {
         const supportedShare = m.hasSupport ? m.share(m.supported.reduce((s, l) => s + l.count, 0)) : null;
         const kpis = Ui.kpis([
             { value: Fmt.int(m.total), label: 'All reviews' },
-            { value: Fmt.int(m.activeLangs.length), label: 'Review languages' },
+            { value: Fmt.int(m.namedLangs.length), label: 'Review languages' },
             { value: Fmt.int(m.regions.length), label: 'Market regions' },
             supportedShare !== null ? { value: Fmt.pct(supportedShare), label: 'In supported languages' } : null,
         ]);
         const rows = m.regions.map((r, i) => `
         <div class="region-row ${cls(i)}" title="${esc(r.name)}: ${Fmt.int(r.count)} reviews">
           <i class="sw"></i>
-          <span class="nm">${esc(r.name)}<small>${Words.count(r.activeLanguages, 'language')} with reviews</small></span>
+          <span class="nm">${esc(r.name)}<small>${r.name === Regions.OTHER ? 'not split by language in the source' : `${Words.count(r.activeLanguages, 'language')} with reviews`}</small></span>
           <span class="ct">${Fmt.int(r.count)}</span>
           <span class="sh">${Fmt.share(r.share)}</span>
         </div>`).join('');
@@ -2121,7 +2277,7 @@ class RegionSection extends Section {
 //    Independent of the workbook; it reads only the Step 3 table.
 // ------------------------------------------------------------
 class LanguageDistributionSection extends Section {
-    static OTHER = /^(other|others|unknown|unspecified)(\s+languages?)?$/i;
+    static OTHER = MarketTable.OTHER;
     get eyebrow() { return 'Aggregate distribution'; }
     get title() { return `All ${Fmt.int(this.ctx.market.total)} reviews, [[by language]]`; }
     get howToRead() {
@@ -2139,7 +2295,7 @@ class LanguageDistributionSection extends Section {
         const m = this.ctx.market;
         const rows = this.rows();
         const max = Math.max(...rows.map(l => l.count), 1); // the biggest language fills its whole track
-        const loc = l => (l.supported === true ? '<span class="loc-yes">Yes</span>' : l.supported === false ? '<span class="loc-no">No</span>' : '');
+        const loc = l => (l.supported === true ? '<span class="loc-yes">Yes</span>' : l.supported === false ? '<span class="loc-no">No</span>' : l.mixed ? '<span class="loc-no">Some titles</span>' : '');
         const body = rows.map(l => `
       <tr class="${l.count ? '' : 'empty'}">
         <td class="lang-name">${esc(l.language)}</td>
@@ -2203,10 +2359,11 @@ class MoneyLensSection extends Section {
     get eyebrow() { return 'The money lens'; }
     get title() { return 'Review volume is not [[revenue]]'; }
     get howToRead() {
-        return "Each language's share of reviews is multiplied by the game's own Steam price in that language's main market, compared with the US price, then rescaled to 100% across the priced languages. It shows where the spend sits, not only where the players are.";
+        const which = this.ctx.priceTitle && !this.ctx.filtered ? ` The prices are for ${this.ctx.priceTitle}, so this section uses that title's review counts only.` : '';
+        return "Each language's share of reviews is multiplied by the game's own Steam price in that language's main market, compared with the US price, then rescaled to 100% across the priced languages. It shows where the spend sits, not only where the players are." + which;
     }
-    isAvailable() { return !!(this.ctx.market && this.ctx.prices && this.data().priced.length >= 2); }
-    data() { return this._data || (this._data = this.ctx.prices.lens(this.ctx.market)); }
+    isAvailable() { return !!(this.ctx.priceMarket && this.ctx.prices && this.data().priced.length >= 2); }
+    data() { return this._data || (this._data = this.ctx.prices.lens(this.ctx.priceMarket)); }
     static money(row) {
         if (!row)
             return '';
@@ -2335,7 +2492,7 @@ class MethodSection extends Section {
         if (analysis.total)
             measured.push(`${Fmt.int(analysis.total)} localization-related reviews from the uploaded workbook, tagged ${Words.list(this.ctx.statusDefs.map(s => s.label))}, across ${Words.count(analysis.languages.length, 'review language')}${meta.platform ? ` on ${meta.platform}` : ''}.`);
         if (market)
-            measured.push(`A separate count of all ${Fmt.int(market.total)} reviews in ${Words.count(market.activeLangs.length, 'language')}${this.ctx.marketScope ? ` (${this.ctx.marketScope})` : ''}, used for the region and language sections.`);
+            measured.push(`A separate count of all ${Fmt.int(market.total)} reviews in ${Words.count(market.namedLangs.length, 'language')}${this.ctx.marketScope ? ` (${this.ctx.marketScope})` : ''}, used for the region and language sections.`);
         const limits = ['Sentiment tags come from the workbook and are reported as supplied. No count was edited, sampled or re-weighted.'];
         if (market)
             limits.push(...market.reconciliation());
@@ -2357,6 +2514,7 @@ const SECTION_REGISTRY = [
     VoiceSentimentSection,
     KeyFindingsSection,
     ProductSection,
+    TitleSection,
     TimelineSection,
     QuotesSection,
     BreakdownSection,
@@ -2763,6 +2921,71 @@ class ReportForm {
         f.marketTable.addEventListener('input', () => this.describeMarket());
         this.priceNote = document.getElementById('priceNote');
         f.priceTable.addEventListener('input', () => this.describePrices());
+        this.titleBox = document.getElementById('marketTitles');
+        this.singleBox = document.getElementById('marketSingle');
+        this.titleFields = [];
+        this.titles = [];
+    }
+    /**
+     * Step 03 per title: with two or more titles in the workbook, one review count box per title
+     * replaces the single box. Text already typed for a title is kept when the boxes are rebuilt.
+     */
+    setTitles(titles) {
+        if (!this.titleBox)
+            return;
+        const kept = new Map(this.titleFields.map(b => [b.title, b.input.value]));
+        const single = this.fields.marketTable.value;
+        this.titles = titles;
+        const multi = titles.length > 1;
+        this.titleBox.hidden = !multi;
+        this.singleBox.hidden = multi;
+        this.titleBox.innerHTML = multi ? titles.map((t, i) => `
+      <div class="field span2 title-market">
+        <label for="f-market-${i}">${esc(t.title)}${t.appId ? ` <span class="label-aside">App ID ${esc(t.appId)}</span>` : ''}</label>
+        <textarea id="f-market-${i}" rows="8" spellcheck="false" placeholder="Paste the review counts for ${esc(t.title)}"></textarea>
+        <div class="field-note" aria-live="polite"></div>
+      </div>`).join('') : '';
+        this.titleFields = multi ? titles.map((t, i) => {
+            const box = { title: t.title, appId: t.appId, input: document.getElementById(`f-market-${i}`), note: this.titleBox.children[i].querySelector('.field-note') };
+            box.input.value = kept.get(t.title) || '';
+            box.input.addEventListener('input', () => { this.describeTitle(box); this.describePrices(); });
+            return box;
+        }) : [];
+        // A table pasted in the single box before the workbook was loaded moves to its title's box.
+        if (multi && single.trim()) {
+            const hit = TitleMatch.find(MarketTable.parse(single).meta, titles);
+            const box = hit && this.titleFields.find(b => b.title === hit.title);
+            if (box && !box.input.value.trim())
+                box.input.value = single;
+        }
+        this.titleFields.forEach(b => this.describeTitle(b));
+        this.describePrices();
+    }
+    get perTitle() { return this.titleFields.length > 0; }
+    hasMarketText() { return this.perTitle ? this.titleFields.some(b => b.input.value.trim()) : !!this.fields.marketTable.value.trim(); }
+    /** Live feedback under one title's box, including a warning when the table names another game. */
+    describeTitle(box) {
+        const text = box.input.value;
+        const parsed = MarketTable.parse(text);
+        const table = MarketTable.from(parsed);
+        if (!text.trim()) {
+            box.note.textContent = '';
+            box.note.className = 'field-note';
+            return;
+        }
+        if (!table) {
+            box.note.textContent = 'No language rows with review counts found yet. Include a header row (Language, Reviews) or lines such as English, 1724.';
+            box.note.className = 'field-note warn';
+            return;
+        }
+        const issues = table.reconciliation();
+        const hit = TitleMatch.find(parsed.meta, this.titles);
+        if ((parsed.meta.appId || parsed.meta.game) && hit && hit.title !== box.title)
+            issues.unshift(`This table looks like it is for ${hit.title}, not ${box.title}.`);
+        else if (parsed.meta.appId && box.appId && Text.digits(parsed.meta.appId) !== box.appId)
+            issues.unshift(`This table is for App ID ${parsed.meta.appId}, but this title's reviews link to App ID ${box.appId}.`);
+        box.note.textContent = table.describe() + (issues.length ? ' ' + issues.join(' ') : '');
+        box.note.className = 'field-note ' + (issues.length ? 'warn' : 'ok');
     }
     /** Live feedback under the Step 03 box: what the parser understood. */
     /** Live feedback under the Step 04 box. */
@@ -2781,8 +3004,17 @@ class ReportForm {
         }
         else {
             const d = table.describe();
-            this.priceNote.textContent = d + (this.fields.marketTable.value.trim() ? '' : ' The money lens also needs the Step 03 review table.');
-            this.priceNote.className = 'field-note ' + (/no exchange-rate/.test(d) ? 'warn' : 'ok');
+            let which = '', off = false;
+            if (this.perTitle) {
+                const hit = TitleMatch.find(table.meta, this.titles);
+                const box = hit && this.titleFields.find(b => b.title === hit.title);
+                off = !box || !box.input.value.trim();
+                which = !hit ? ' These prices match none of the titles, so the money lens uses all titles\' review counts added together.'
+                    : off ? ` These prices are for ${hit.title}; paste its review counts in Step 03 to use them.`
+                        : ` The money lens uses ${hit.title}'s review counts.`;
+            }
+            this.priceNote.textContent = d + which + (this.hasMarketText() ? '' : ' The money lens also needs the Step 03 review table.');
+            this.priceNote.className = 'field-note ' + (/no exchange-rate/.test(d) || off ? 'warn' : 'ok');
         }
     }
     describeMarket() {
@@ -2850,6 +3082,7 @@ class ReportForm {
             market,
             prices: PriceTable.parse(f.priceTable.value),
             marketScope: f.marketScope.value.trim(),
+            titleMarkets: this.titleFields.filter(b => b.input.value.trim()).map(b => ({ title: b.title, parsed: MarketTable.parse(b.input.value) })),
         };
     }
 }
@@ -2916,6 +3149,7 @@ class App {
         this.dataset = dataset;
         this.form.fill(dataset.metadata);
         this.form.populateProducts(dataset.metadata.products || []);
+        this.form.setTitles(TitleMatch.titles(dataset.reviews));
         const label = this.dropzone.querySelector('.filename') || Html.el('div', 'filename');
         const source = dataset.reviews.length ? `${Fmt.int(dataset.reviews.length)} review rows` : `${Fmt.int(dataset.aggregateRows.length)} aggregate rows`;
         label.textContent = `Loaded ${fileName}: ${source}`;
@@ -2980,6 +3214,8 @@ class App {
             prices: input.prices,
             marketScope: input.marketScope,
             filtered: !!input.product,
+            titleMarkets: input.titleMarkets,
+            allTitles: this.form.titles,
         });
         new ReportDocument(ctx).mount(this.reportEl);
         const warnings = ctx.warnings();
