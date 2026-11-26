@@ -3002,8 +3002,11 @@ function allcorrectSteamCounts() {
         return;
     }
     var found = String(location.href).match(/\/app\/(\d+)/) || String(location.hash).match(/allcorrect=(\d+)/);
-    var appid = found ? found[1] : String(prompt('Steam App ID of the game') || '').replace(/\D/g, '');
-    if (!appid) return;
+    if (!found) {
+        alert('Open the game\'s store page on Steam (its address has /app/ in it), then click the Allcorrect Steam counts bookmark again.');
+        return;
+    }
+    var appid = found[1];
     var LANGS = [['english', 'English'], ['russian', 'Russian'], ['schinese', 'Chinese (Simplified)'], ['tchinese', 'Chinese (Traditional)'],
         ['german', 'German'], ['french', 'French'], ['spanish', 'Spanish (Spain)'], ['latam', 'Spanish (Latin America)'],
         ['brazilian', 'Portuguese (Brazil)'], ['portuguese', 'Portuguese (Portugal)'], ['italian', 'Italian'], ['polish', 'Polish'],
@@ -3105,7 +3108,7 @@ function allcorrectSteamCounts() {
             var game = info.name || ('App ' + appid);
             if (window.opener && !window.opener.closed) {
                 window.opener.postMessage({ type: 'allcorrect-steam-counts', appid: appid, tsv: tsv }, '*');
-                say(game + ': ' + total.toLocaleString('en-US') + ' reviews sent to the report generator. You can close this tab.');
+                say(game + ': ' + total.toLocaleString('en-US') + ' reviews sent to the report generator. For another game, open its store page in this tab and click the bookmark again.');
                 return;
             }
             var copied = false;
@@ -3162,16 +3165,15 @@ class ReportForm {
                 this.marketNote.textContent = 'Steam is open in a new tab. Click the Allcorrect Steam counts bookmark there; the counts arrive here in about 30 seconds.';
                 this.marketNote.className = 'field-note';
             });
-        const install = document.getElementById('steamBookmarklet');
-        if (install) {
+        document.querySelectorAll('a.bookmarklet').forEach(install => {
             install.href = SteamFetch.bookmarkletHref();
             install.addEventListener('click', e => {
                 e.preventDefault();
-                const tip = document.getElementById('steamInstallNote');
+                const tip = install.parentElement.querySelector('.hint');
                 if (tip)
                     tip.textContent = 'Drag the button to your bookmarks bar (Cmd+Shift+B or Ctrl+Shift+B shows it). It only works on a Steam page.';
             });
-        }
+        });
         this.priceNote = document.getElementById('priceNote');
         f.priceTable.addEventListener('input', () => this.describePrices());
         this.titleBox = document.getElementById('marketTitles');
@@ -3561,6 +3563,12 @@ class RecPrices {
 }
 /** Which Steam currency a language's main market pays in. Eurozone and EU markets that Steam prices in euros share EUR. */
 class RecMarkets {
+    /** "Chinese (Simpl.)", "Chinese (Simplified)" and "Simplified Chinese" share one key. */
+    static key(name) {
+        return Text.normalize(name).replace(/\bsimpl(\.|\b)/g, 'simplified ').replace(/\btrad(\.|\b)/g, 'traditional ')
+            .replace(/brazilian/g, 'brazil').replace(/\blatam\b/g, 'latin america')
+            .replace(/[^a-z]+/g, ' ').trim().split(' ').sort().join(' ');
+    }
     static RULES = [
         [/english/i, 'USD'], [/chinese.*(trad|taiw|hk|hong)|trad.*chinese/i, 'TWD'], [/chinese|mandarin/i, 'CNY'],
         [/portug.*bra|brazil/i, 'BRL'], [/spanish.*(lat|mex|america)|latam/i, 'MXN'], [/russian/i, 'RUB'], [/ukrain/i, 'UAH'],
@@ -3597,7 +3605,7 @@ class RecContext {
             const sales = l.avg * perReview;
             return {
                 ...l,
-                covered: covered.has(Text.normalize(l.language)),
+                covered: covered.has(RecMarkets.key(l.language)),
                 iso, row, multi,
                 usdPrice,
                 revenue: Number.isFinite(multi) ? sales * multi : NaN,
@@ -3755,8 +3763,16 @@ class RecDocument {
 class RecForm {
     constructor(doc = document) {
         const $ = id => doc.getElementById(id);
-        this.f = { reviews: $('r-reviews'), prices: $('r-prices'), project: $('r-project'), publisher: $('r-publisher'), base: $('r-base'), perReview: $('r-perReview') };
+        this.f = { reviews: $('r-reviews'), prices: $('r-prices'), project: $('r-project'), publisher: $('r-publisher'), base: $('r-base'), perReview: $('r-perReview'), query: $('r-steamQuery') };
         this.reviewsNote = $('r-reviewsNote');
+        this.gamesBox = $('r-games');
+        this.gamesNote = $('r-gamesNote');
+        this.addBtn = $('r-addGame');
+        this.ownQuery = $('r-ownQuery');
+        this.ownBtn = $('r-ownBtn');
+        this.ownNote = $('r-ownNote');
+        this.awaitingOwn = false;
+        this.games = RecForm.loadGames();
         this.pricesNote = $('r-pricesNote');
         this.langBox = $('r-langs');
         this.shaded = new Set();
@@ -3772,27 +3788,159 @@ class RecForm {
         });
         this.f.reviews.addEventListener('input', () => this.refresh(true));
         this.f.prices.addEventListener('input', () => this.refresh());
+        this.addBtn.addEventListener('click', () => this.openSteam());
+        this.f.query.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); this.openSteam(); } });
+        this.ownBtn.addEventListener('click', () => this.openOwnSteam());
+        this.ownQuery.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); this.openOwnSteam(); } });
+        this.renderGames();
+        this.refresh();
         [this.f.base, this.f.perReview].forEach(el => el.addEventListener('input', () => this.refresh()));
     }
-    get reviews() { return RecReviews.parse(this.f.reviews.value); }
+    // ---------- Comparable games fetched from Steam ----------
+    static GAMES_KEY = 'allcorrect.recGames.v1';
+    static loadGames() {
+        try { const g = JSON.parse(localStorage.getItem(RecForm.GAMES_KEY) || '[]'); return Array.isArray(g) ? g : []; }
+        catch (e) { return []; }
+    }
+    saveGames() {
+        try { localStorage.setItem(RecForm.GAMES_KEY, JSON.stringify(this.games)); }
+        catch (e) { /* kept for this visit only */ }
+    }
+    /**
+     * Opens Steam in one reusable tab: a store link or App ID opens that game, other text searches for it,
+     * nothing opens the game search. The bookmark sends each game's counts back here.
+     */
+    static steamUrl(q) {
+        const id = (q.match(/\/app\/(\d+)/) || q.match(/^(\d+)$/) || [])[1];
+        return id ? `https://store.steampowered.com/app/${id}/`
+            : q ? `https://store.steampowered.com/search/?term=${encodeURIComponent(q)}&category1=998`
+                : 'https://store.steampowered.com/search/?category1=998';
+    }
+    openSteam() {
+        this.awaitingOwn = false;
+        window.open(RecForm.steamUrl(this.f.query.value.trim()), 'allcorrect-steam');
+        this.f.query.value = '';
+        this.gamesNote.textContent = 'Steam is open in a new tab. Open the game\'s store page and click the Allcorrect Steam counts bookmark; the game appears here in about 30 seconds. For more games, open the next one in the same tab and click the bookmark again.';
+        this.gamesNote.className = 'field-note';
+    }
+    /** Our own game: the next table the bookmark sends sets the supported languages instead of adding a comparable game. */
+    openOwnSteam() {
+        this.awaitingOwn = true;
+        window.open(RecForm.steamUrl(this.ownQuery.value.trim() || this.f.project.value.trim()), 'allcorrect-steam');
+        this.ownNote.textContent = 'Steam is open in a new tab. Open your game\'s store page and click the Allcorrect Steam counts bookmark; its supported languages are ticked below when it finishes.';
+        this.ownNote.className = 'field-note';
+    }
+    /** Ticks the languages our game's store page lists as supported. Returns a status line. */
+    setOwnFromSteam(appId, tsv) {
+        this.awaitingOwn = false;
+        const parsed = MarketTable.parse(tsv);
+        const game = parsed.meta.game || `App ${appId}`;
+        if (!parsed.rows.some(r => r.supported !== null)) {
+            this.ownNote.textContent = `Could not read the supported languages for ${game}. Run the bookmark on the game's store page (store.steampowered.com), or tick them below.`;
+            this.ownNote.className = 'field-note warn';
+            return this.ownNote.textContent;
+        }
+        const yes = parsed.rows.filter(r => r.supported === true).map(r => r.language);
+        this.covered = new Set(yes.map(RecMarkets.key));
+        if (!this.f.project.value.trim())
+            this.f.project.value = game;
+        this.ownAppId = Text.digits(parsed.meta.appId) || appId;
+        const listed = new Set((this.reviews ? this.reviews.langs : []).map(l => RecMarkets.key(l.language)));
+        const outside = yes.filter(l => !listed.has(RecMarkets.key(l)));
+        this.ownNote.textContent = `${game} supports ${Words.count(yes.length, 'language')} on Steam: ${Words.list(yes)}.${outside.length ? ` Not in the comparable games, so not ranked: ${Words.list(outside)}.` : ''}`;
+        this.ownNote.className = 'field-note ok';
+        this.renderLangs(this.reviews, this.prices);
+        return `Supported languages read from ${game}'s store page.`;
+    }
+    /** A table sent by the bookmark becomes one game; fetching the same game again replaces it. Returns its name. */
+    addSteamGame(appId, tsv) {
+        const parsed = MarketTable.parse(tsv);
+        const langs = parsed.rows
+            .filter(r => r.count > 0 && !MarketTable.OTHER.test(r.language.trim()))
+            .map(r => ({ language: r.language, count: r.count }));
+        if (!langs.length)
+            return '';
+        const game = {
+            appId: Text.digits(parsed.meta.appId) || appId,
+            name: parsed.meta.game || `App ${appId}`,
+            total: parsed.declaredTotal || parsed.rows.reduce((s, r) => s + r.count, 0),
+            fetched: parsed.meta.fetched || '',
+            langs,
+        };
+        const at = this.games.findIndex(g => g.appId === game.appId);
+        if (at >= 0)
+            this.games[at] = game;
+        else
+            this.games.push(game);
+        this.saveGames();
+        this.renderGames();
+        this.refresh();
+        this.gamesNote.textContent = `${at >= 0 ? 'Updated' : 'Added'} ${game.name}: ${Fmt.int(game.total)} reviews in ${Words.count(langs.length, 'language')}.`;
+        this.gamesNote.className = 'field-note ok';
+        return game.name;
+    }
+    renderGames() {
+        if (!this.games.length) {
+            this.gamesBox.innerHTML = '<p class="rec-games-empty">No comparable games yet.</p>';
+            return;
+        }
+        this.gamesBox.innerHTML = this.games.map((g, i) => `
+      <div class="rec-game">
+        <div class="g-name">
+          <a href="https://store.steampowered.com/app/${esc(g.appId)}/" target="_blank" rel="noopener noreferrer">${esc(g.name)}</a>
+          <small>App ID ${esc(g.appId)} · ${Fmt.int(g.total)} reviews · ${Words.count(g.langs.length, 'language')}${g.fetched ? ` · fetched ${esc(g.fetched)}` : ''}</small>
+        </div>
+        <button type="button" class="g-remove" data-i="${i}" aria-label="Remove ${esc(g.name)}">Remove</button>
+      </div>`).join('');
+        this.gamesBox.querySelectorAll('.g-remove').forEach(btn => btn.addEventListener('click', () => {
+            this.games.splice(Number(btn.dataset.i), 1);
+            this.saveGames();
+            this.renderGames();
+            this.refresh();
+        }));
+    }
+    /** Steam games first, then any pasted titles; languages merged by name, a missing language counts as 0. */
+    get reviews() {
+        const pasted = RecReviews.parse(this.f.reviews.value);
+        const titles = [], cols = [], names = new Map();
+        const name = n => { const k = RecMarkets.key(n); if (!names.has(k)) names.set(k, n); return k; };
+        this.games.forEach(g => { titles.push(g.name); cols.push(new Map(g.langs.map(l => [name(l.language), l.count]))); });
+        if (pasted)
+            pasted.titles.forEach((t, i) => { titles.push(t); cols.push(new Map(pasted.langs.map(l => [name(l.language), l.counts[i]]))); });
+        if (!titles.length)
+            return null;
+        const fromPaste = new Map(pasted ? pasted.langs.map(l => [RecMarkets.key(l.language), l]) : []);
+        const langs = [...names.entries()].map(([k, language]) => {
+            const counts = cols.map(m => m.get(k) || 0);
+            const p = fromPaste.get(k);
+            return {
+                language, counts,
+                avg: counts.reduce((s, n) => s + n, 0) / counts.length,
+                sourceAvg: p && !this.games.length ? p.sourceAvg : NaN,
+                covered: !!(p && p.covered),
+            };
+        }).filter(l => l.counts.some(n => n > 0));
+        return { project: pasted ? pasted.project : '', titles, langs };
+    }
     get prices() { return RecPrices.parse(this.f.prices.value); }
     get basePrice() { return RecPrices.amount(this.f.base.value); }
     get perReview() { const n = Number(String(this.f.perReview.value).replace(',', '.')); return n > 0 ? n : 30; }
     refresh(newReviews = false) {
         const reviews = this.reviews, prices = this.prices;
         const note = (el, text, kind) => { el.textContent = text; el.className = 'field-note' + (kind ? ' ' + kind : ''); };
+        const pasted = this.f.reviews.value.trim() ? RecReviews.parse(this.f.reviews.value) : null;
         if (!this.f.reviews.value.trim())
             note(this.reviewsNote, '');
-        else if (!reviews)
+        else if (!pasted)
             note(this.reviewsNote, 'No table found yet. Include the header row (Language, then one "... Reviews" column per title).', 'warn');
         else {
             if (newReviews) {
-                if (reviews.project && !this.f.project.value.trim())
-                    this.f.project.value = reviews.project;
-                const fromCol = reviews.langs.filter(l => l.covered).map(l => Text.normalize(l.language));
-                this.covered = new Set(this.shaded.size ? [...this.shaded] : fromCol);
+                if (pasted.project && !this.f.project.value.trim())
+                    this.f.project.value = pasted.project;
+                const fromCol = pasted.langs.filter(l => l.covered).map(l => RecMarkets.key(l.language));
+                this.covered = new Set(this.shaded.size ? [...this.shaded].map(RecMarkets.key) : fromCol);
             }
-            note(this.reviewsNote, `Read ${Words.count(reviews.langs.length, 'language')} across ${Words.count(reviews.titles.length, 'title')}: ${Words.list(reviews.titles)}.${this.shaded.size && newReviews ? ` Shaded cells marked ${Words.count(this.covered.size, 'covered language')}; adjust below.` : ''}`, 'ok');
+            note(this.reviewsNote, `Read ${Words.count(pasted.langs.length, 'language')} across ${Words.count(pasted.titles.length, 'title')}: ${Words.list(pasted.titles)}.${this.shaded.size && newReviews ? ` Shaded cells marked ${Words.count(this.covered.size, 'covered language')}; adjust in Step 03.` : ''}`, 'ok');
         }
         if (!this.f.prices.value.trim())
             note(this.pricesNote, '');
@@ -3812,15 +3960,15 @@ class RecForm {
         }
         const options = [...new Map([['USD', 'US Dollar'], ...prices.rows.filter(r => r.iso).map(r => [r.iso, r.currency])]).entries()];
         this.langBox.innerHTML = `
-      <div class="rec-lang-head"><span>Language</span><span>Already covered</span><span>Priced in</span><span>Regional price</span></div>
+      <div class="rec-lang-head"><span>Language</span><span>Your game supports</span><span>Priced in</span><span>Regional price</span></div>
       ${reviews.langs.map((l, i) => {
-            const key = Text.normalize(l.language);
+            const key = RecMarkets.key(l.language);
             const iso = this.currencyFor(l.language, options);
             const row = prices.rows.find(r => r.iso === iso);
             const price = iso === 'USD' ? (this.basePrice > 0 ? Fmt.money(this.basePrice, 'USD') : 'base price') : row ? row.raw[2] : 'no price';
             return `<div class="rec-lang-row">
           <span class="nm">${esc(l.language)}</span>
-          <label class="tick"><input type="checkbox" data-k="${esc(key)}"${this.covered.has(key) ? ' checked' : ''}> Covered</label>
+          <label class="tick"><input type="checkbox" data-k="${esc(key)}"${this.covered.has(key) ? ' checked' : ''}> Supported</label>
           <select data-k="${esc(key)}"><option value="">None</option>${options.map(([code, name]) => `<option value="${code}"${code === iso ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select>
           <span class="pr${row || iso === 'USD' ? '' : ' missing'}">${esc(price)}</span>
         </div>`;
@@ -3829,7 +3977,7 @@ class RecForm {
         this.langBox.querySelectorAll('select').forEach(sel => sel.addEventListener('change', () => { this.currency.set(sel.dataset.k, sel.value); this.renderLangs(this.reviews, this.prices); }));
     }
     currencyFor(language, options = null) {
-        const key = Text.normalize(language);
+        const key = RecMarkets.key(language);
         if (this.currency.has(key))
             return this.currency.get(key);
         const iso = RecMarkets.defaultFor(language);
@@ -3837,7 +3985,7 @@ class RecForm {
     }
     validate() {
         if (!this.reviews)
-            return { field: this.f.reviews, message: 'Paste the reviews table of the comparable titles first.' };
+            return { field: this.addBtn, message: 'Add at least one comparable game from Steam (or paste a reviews table) first.' };
         if (!this.prices.rows.length)
             return { field: this.f.prices, message: "Paste Steam's price recommendation table." };
         if (!(this.basePrice > 0))
@@ -3926,6 +4074,13 @@ class App {
         this.printer = new PrintController();
         this.form.init();
         SteamFetch.listen((appId, tsv) => {
+            if (this.tool && this.tool.value === 'langrec') {
+                if (this.recForm.awaitingOwn)
+                    return this.recStatus.set(this.recForm.setOwnFromSteam(appId, tsv), 'ok');
+                const name = this.recForm.addSteamGame(appId, tsv);
+                this.recStatus.set(name ? `${name} added to the comparable games.` : `Steam sent no language counts for App ID ${appId}.`, name ? 'ok' : 'warn');
+                return;
+            }
             const where = this.form.receiveSteam(appId, tsv);
             this.status.set(where ? `Steam review counts for ${where} arrived and were placed in Step 03.` : `Steam review counts for App ID ${appId} arrived, but no title in this workbook matches it.`, where ? 'ok' : 'warn');
         });

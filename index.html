@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261126d">
+  <link rel="stylesheet" href="styles.css?v=20261126f">
 </head>
 <body>
 
@@ -112,8 +112,8 @@
       <p class="hint">Paste the total review counts straight from a spreadsheet or export. When the workbook holds several titles, one box appears per title; paste each title's own table into its box, and the report shows each title's counts next to its player sentiment. Tables with Region, Language, Reviews and Supported columns are read automatically, along with metadata lines (Game, App ID, Fetched, Source), a Total row and a second region summary. Simple lines such as "English, 1724" also work. Shares are always recalculated from the counts. This box drives the region chart, the language distribution, the coverage tiers and the related takeaways.</p>
     </div>
     <div class="steam-install">
-      <a class="bookmarklet" id="steamBookmarklet" href="#" title="Drag me to your bookmarks bar">Allcorrect Steam counts</a>
-      <p class="hint" id="steamInstallNote">Steam games: drag this button to your bookmarks bar once. Then "Fetch from Steam" opens the game's store page; click the bookmark there and every review is counted per language, with the store page's supported languages, and placed in the right box below (about 30 seconds per game). Steam only lets its own pages read these counts, which is why the bookmark runs there.</p>
+      <a class="bookmarklet" href="#" title="Drag me to your bookmarks bar">Allcorrect Steam counts</a>
+      <p class="hint">Steam games: drag this button to your bookmarks bar once. Then "Fetch from Steam" opens the game's store page; click the bookmark there and every review is counted per language, with the store page's supported languages, and placed in the right box below (about 30 seconds per game). Steam only lets its own pages read these counts, which is why the bookmark runs there.</p>
     </div>
     <div class="field-grid" id="marketTitles" hidden></div>
     <div class="field-grid" id="marketSingle">
@@ -157,16 +157,32 @@
     <div class="panel-head">
       <div>
         <div class="step-label">Step 01</div>
-        <h2>Reviews on comparable titles</h2>
+        <h2>Comparable games on Steam</h2>
       </div>
-      <p class="hint">Paste the table of Steam reviews per language on similar games: a Language column, then one "... Reviews" column per title (% and average columns are allowed and recalculated). Copied straight from Google Sheets or Excel, shaded language cells are taken as the languages your game already covers; a "Covered" column works too, and you can change the ticks in Step 03.</p>
+      <p class="hint">Add the games yours will be compared with. "Add a game from Steam" opens Steam in a new tab; open a game's store page there and click the Allcorrect Steam counts bookmark. Its reviews in every Steam language arrive here on their own, in about 30 seconds. For the next game, open it in the same tab and click the bookmark again. Games stay here until you remove them.</p>
     </div>
-    <div class="field-grid">
-      <div class="field span2">
-        <label for="r-reviews">Reviews per language</label>
-        <textarea id="r-reviews" rows="10" spellcheck="false" placeholder="Language&#9;Warhammer 40,000: Rogue Trader – Reviews&#9;Warhammer 40,000: Rogue Trader – %&#9;Mass Effect Legendary Edition – Reviews&#10;English&#9;27,816&#9;55.5%&#9;46,277&#10;Russian&#9;8,747&#9;17.4%&#9;4,953"></textarea>
-        <div class="field-note" id="r-reviewsNote" aria-live="polite"></div>
+    <div class="steam-install">
+      <a class="bookmarklet" href="#" title="Drag me to your bookmarks bar">Allcorrect Steam counts</a>
+      <p class="hint">Once: drag this button to your bookmarks bar. It only runs on Steam pages, because Steam only lets its own pages read these counts.</p>
+    </div>
+    <div class="rec-add">
+      <input id="r-steamQuery" placeholder="Optional: game name, Steam link or App ID">
+      <button type="button" id="r-addGame" class="primary">Add a game from Steam</button>
+    </div>
+    <div class="field-note" id="r-gamesNote" aria-live="polite"></div>
+    <div class="rec-games" id="r-games"></div>
+    <details class="rec-paste">
+      <summary>Or paste a reviews table</summary>
+      <div class="field-grid">
+        <div class="field span2">
+          <label for="r-reviews">Reviews per language</label>
+          <textarea id="r-reviews" rows="8" spellcheck="false" placeholder="Language&#9;Warhammer 40,000: Rogue Trader – Reviews&#9;Mass Effect Legendary Edition – Reviews&#10;English&#9;27,816&#9;46,277&#10;Russian&#9;8,747&#9;4,953"></textarea>
+          <div class="field-note" id="r-reviewsNote" aria-live="polite"></div>
+          <p class="hint">One "... Reviews" column per title; % and average columns are recalculated. Copied from Google Sheets or Excel, shaded language cells are ticked as covered in Step 03.</p>
+        </div>
       </div>
+    </details>
+    <div class="field-grid">
       <div class="field">
         <label for="r-project">Your game</label>
         <input id="r-project" placeholder="Read from &quot;Languages that are covered in ...&quot; when present">
@@ -205,10 +221,15 @@
     <div class="panel-head details-head">
       <div>
         <div class="step-label">Step 03</div>
-        <h2>Covered languages and currencies</h2>
+        <h2>Your game's languages and currencies</h2>
       </div>
-      <p class="hint">Tick the languages your game already ships with. Each language is priced in its main Steam market (English in US dollars, euro-market languages in euros, Brazilian Portuguese in reals and so on); change the currency where a language should use another market, or pick one for languages without a default, such as Turkish.</p>
+      <p class="hint">Tick the languages your game already supports, or read them from its Steam store page: "Get from our Steam page" opens Steam, and the Allcorrect Steam counts bookmark on your game's page ticks every language the page lists as supported. Each language is priced in its main Steam market (English in US dollars, euro-market languages in euros, Brazilian Portuguese in reals and so on); change the currency where a language should use another market, or pick one for languages without a default, such as Turkish.</p>
     </div>
+    <div class="rec-add">
+      <input id="r-ownQuery" placeholder="Optional: your game's Steam link or App ID">
+      <button type="button" id="r-ownBtn">Get from our Steam page</button>
+    </div>
+    <div class="field-note" id="r-ownNote" aria-live="polite"></div>
     <div class="rec-langs" id="r-langs"></div>
 
     <div class="panel-actions">
@@ -221,6 +242,6 @@
   <div id="report"></div>
 </div>
 
-  <script src="app.js?v=20261126d"></script>
+  <script src="app.js?v=20261126f"></script>
 </body>
 </html>
