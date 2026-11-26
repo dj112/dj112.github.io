@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261120l">
+  <link rel="stylesheet" href="styles.css?v=20261126d">
 </head>
 <body>
 
@@ -15,14 +15,21 @@
   <div class="toolbar no-print">
     <div class="brand-lockup">
       <div class="brand-mark"><span class="name">Allcorrect</span></div>
-      <span class="tag">Sentiment report generator</span>
+      <label class="print-control tool-control" for="toolSelect">
+        <span>Tool</span>
+        <select id="toolSelect">
+          <option value="sentiment">Sentiment report</option>
+          <option value="langrec">Language recommendations</option>
+        </select>
+      </label>
     </div>
     <div class="toolbar-actions">
-      <label class="print-control" for="printMode">
-        <span>Content</span>
-        <select id="printMode">
-          <option value="report">Report only</option>
-          <option value="report-reviews">Report + reviews</option>
+      <label class="print-control" for="reviewsMode">
+        <span>Source reviews</span>
+        <select id="reviewsMode">
+          <option value="html">In saved HTML</option>
+          <option value="both">In HTML and PDF</option>
+          <option value="none">Leave out</option>
         </select>
       </label>
       <label class="print-control" for="printTheme">
@@ -142,13 +149,78 @@
 
     <div class="panel-actions">
       <button id="generateBtn" class="primary" disabled>Generate report</button>
-      <span class="action-note">The on-screen report always includes the full reviews section when review rows exist. Use "Content" above to choose whether the PDF or saved HTML includes the source reviews.</span>
+      <span class="action-note">The on-screen report always includes the full reviews section when review rows exist. Use "Source reviews" above to choose where every source review goes: in the saved HTML only (the default), in both the HTML and the PDF, or in neither.</span>
     </div>
+  </div>
+
+  <div class="panel no-print" id="recPanel" hidden>
+    <div class="panel-head">
+      <div>
+        <div class="step-label">Step 01</div>
+        <h2>Reviews on comparable titles</h2>
+      </div>
+      <p class="hint">Paste the table of Steam reviews per language on similar games: a Language column, then one "... Reviews" column per title (% and average columns are allowed and recalculated). Copied straight from Google Sheets or Excel, shaded language cells are taken as the languages your game already covers; a "Covered" column works too, and you can change the ticks in Step 03.</p>
+    </div>
+    <div class="field-grid">
+      <div class="field span2">
+        <label for="r-reviews">Reviews per language</label>
+        <textarea id="r-reviews" rows="10" spellcheck="false" placeholder="Language&#9;Warhammer 40,000: Rogue Trader – Reviews&#9;Warhammer 40,000: Rogue Trader – %&#9;Mass Effect Legendary Edition – Reviews&#10;English&#9;27,816&#9;55.5%&#9;46,277&#10;Russian&#9;8,747&#9;17.4%&#9;4,953"></textarea>
+        <div class="field-note" id="r-reviewsNote" aria-live="polite"></div>
+      </div>
+      <div class="field">
+        <label for="r-project">Your game</label>
+        <input id="r-project" placeholder="Read from &quot;Languages that are covered in ...&quot; when present">
+      </div>
+      <div class="field">
+        <label for="r-publisher">Publisher / studio</label>
+        <input id="r-publisher" placeholder="Optional, shown on the cover">
+      </div>
+    </div>
+
+    <div class="panel-divider"></div>
+    <div class="panel-head details-head">
+      <div>
+        <div class="step-label">Step 02</div>
+        <h2>Steam's price recommendation</h2>
+      </div>
+      <p class="hint">In Steamworks, enter your US base price in the pricing tool and copy the whole recommendation table: currency, then the exchange-rate, purchasing-power and multi-variable conversions. The multi-variable price is the one the formula uses; the exchange-rate price turns it back into US dollars so languages can be compared.</p>
+    </div>
+    <div class="field-grid">
+      <div class="field span2">
+        <label for="r-prices">Price recommendation</label>
+        <textarea id="r-prices" rows="10" spellcheck="false" placeholder="Conversion Method&#10;Currency&#10;Exchange-rate conversion only&#10;Purchasing power conversion only&#10;Multi-variable conversion&#10;GB Pounds&#10;£7.59&#10;£6.69&#10;£8.19&#10;Euros&#10;€8,99&#10;€7,59&#10;€9,69"></textarea>
+        <div class="field-note" id="r-pricesNote" aria-live="polite"></div>
+      </div>
+      <div class="field">
+        <label for="r-base">US base price (USD) <span class="required-mark" aria-hidden="true">*</span></label>
+        <input id="r-base" inputmode="decimal" placeholder="The price you entered in Steam, e.g. 9.99">
+      </div>
+      <div class="field">
+        <label for="r-perReview">Sales per review</label>
+        <input id="r-perReview" inputmode="decimal" value="30">
+      </div>
+    </div>
+
+    <div class="panel-divider"></div>
+    <div class="panel-head details-head">
+      <div>
+        <div class="step-label">Step 03</div>
+        <h2>Covered languages and currencies</h2>
+      </div>
+      <p class="hint">Tick the languages your game already ships with. Each language is priced in its main Steam market (English in US dollars, euro-market languages in euros, Brazilian Portuguese in reals and so on); change the currency where a language should use another market, or pick one for languages without a default, such as Turkish.</p>
+    </div>
+    <div class="rec-langs" id="r-langs"></div>
+
+    <div class="panel-actions">
+      <button id="recGenerateBtn" class="primary">Generate recommendations</button>
+      <span class="action-note">Potential revenue = average reviews per title × sales per review × regional price (multi-variable conversion), before taxes and Steam's commission.</span>
+    </div>
+    <div class="status-line" id="recStatusLine"></div>
   </div>
 
   <div id="report"></div>
 </div>
 
-  <script src="app.js?v=20261120l"></script>
+  <script src="app.js?v=20261126d"></script>
 </body>
 </html>

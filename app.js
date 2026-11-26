@@ -241,6 +241,15 @@ class Fmt {
     /** One percentage format everywhere: "42.3%", and "<0.1%" for tiny non-zero shares. */
     static share(v) { const n = Number(v) || 0; return n > 0 && n < 0.05 ? '<0.1%' : n.toFixed(1) + '%'; }
     static pct(v) { return Fmt.share(v); }
+    /** 9.99 -> "$9.99"; compact -> "$6.9M". Unknown currency codes fall back to "1,234 XYZ". */
+    static money(v, iso = 'USD', compact = false) {
+        const n = Number(v);
+        if (!Number.isFinite(n))
+            return '';
+        const opts = compact ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: n >= 1000 ? 0 : 2 };
+        try { return new Intl.NumberFormat('en-US', { style: 'currency', currency: iso || 'USD', currencyDisplay: 'narrowSymbol', ...opts }).format(n); }
+        catch (e) { return `${new Intl.NumberFormat('en-US', opts).format(n)} ${iso}`; }
+    }
     static dateRange(from, to) { return [from, to].filter(Boolean).join(' to '); }
 }
 /** Plain-English helpers for generated sentences. */
@@ -2873,9 +2882,9 @@ class HtmlExporter {
             return new URL(src, location.href).href; // keep a working link if inlining fails
         }
     }
-    static fileName(title) {
+    static fileName(title, suffix = 'sentiment-report') {
         const slug = String(title || 'report').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
-        return `${slug || 'report'}-sentiment-report.html`;
+        return `${slug || 'report'}-${suffix}.html`;
     }
     static async build(reportEl, { title, includeReviews, theme = 'dark' }) {
         const clone = reportEl.cloneNode(true);
@@ -2910,7 +2919,7 @@ ${styles}
     static async download(reportEl, options) {
         const html = await HtmlExporter.build(reportEl, options);
         const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-        const a = Object.assign(document.createElement('a'), { href: url, download: HtmlExporter.fileName(options.title) });
+        const a = Object.assign(document.createElement('a'), { href: url, download: HtmlExporter.fileName(options.title, options.suffix) });
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -3369,10 +3378,527 @@ class ReportForm {
         };
     }
 }
+/* ===== langrec.js ===== */
+/* ============================================================
+   Language recommendations: the second tool.
+
+   Inputs (both pasted):
+     1. Reviews per language on comparable titles (one column per
+        title). The average per title is recalculated here.
+     2. Steam's regional price recommendation for one base US price:
+        per currency, the exchange-rate, purchasing-power and
+        multi-variable conversions.
+   Output: potential revenue per language before taxes and Steam's
+   commission, using one formula the report states:
+     average reviews per title x sales per review (30) x regional
+     price (multi-variable conversion).
+   US dollar equivalents use the same Steam table: multi-variable
+   price / exchange-rate price x the US base price. No outside
+   exchange rates, so the tool stays offline.
+   ============================================================ */
+class RecTable {
+    /** Rows of cells from pasted text: tab, semicolon or 2+ space separated; quoted cells may hold tabs or line breaks. */
+    static rows(text) {
+        const src = String(text || '').replace(/\r\n?/g, '\n');
+        const tabbed = src.includes('\t');
+        if (!tabbed)
+            return src.split('\n').map(l => l.split(/;|\s{2,}/).map(c => c.trim()));
+        const rows = [];
+        let row = [], cell = '', quoted = false;
+        for (let i = 0; i < src.length; i++) {
+            const ch = src[i];
+            if (quoted) {
+                if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; }
+                else if (ch === '"') quoted = false;
+                else cell += ch;
+            }
+            else if (ch === '"' && cell === '') quoted = true;
+            else if (ch === '\t') { row.push(cell.trim()); cell = ''; }
+            else if (ch === '\n') { row.push(cell.trim()); rows.push(row); row = []; cell = ''; }
+            else cell += ch;
+        }
+        row.push(cell.trim());
+        rows.push(row);
+        return rows;
+    }
+    /** "27,816" -> 27816; "-" or blank -> 0; text -> NaN. */
+    static count(v) {
+        const s = String(v ?? '').replace(/\s/g, '');
+        if (!s || /^[-–—]$/.test(s))
+            return 0;
+        return /^\d[\d,.]*$/.test(s) ? parseInt(s.replace(/[,.]/g, ''), 10) : NaN;
+    }
+}
+/** Reviews per language on comparable titles. */
+class RecReviews {
+    /**
+     * { project, titles: [name], langs: [{ language, counts: [n], avg, sourceAvg, covered }] } or null.
+     * Title columns are the ones named "... Reviews" (or any numeric column that is not a % or an average).
+     */
+    static parse(text) {
+        const rows = RecTable.rows(text);
+        let project = '';
+        rows.forEach(r => { const m = r.join(' ').match(/covered in\s+(.+?)\s*$/i); if (m && !project) project = m[1].trim(); });
+        const headIdx = rows.findIndex(r => /^languages?$/i.test(r[0] || '') || r.some(c => /reviews?$/i.test(c) && !/average/i.test(c)));
+        if (headIdx < 0)
+            return null;
+        const head = rows[headIdx];
+        const langCol = Math.max(0, head.findIndex(c => /^languages?$/i.test(c)));
+        const avgCol = head.findIndex(c => /average/i.test(c));
+        const coverCol = head.findIndex(c => /^(covered|supported|localized|localised)$/i.test(c));
+        let cols = head.map((c, i) => ({ c, i })).filter(({ c, i }) => i !== langCol && i !== avgCol && /reviews?$/i.test(c));
+        const body = rows.slice(headIdx + 1).filter(r => (r[langCol] || '').trim() && !/^(total|sum)$/i.test(r[langCol].trim()));
+        if (!cols.length)
+            cols = head.map((c, i) => ({ c, i })).filter(({ c, i }) => i !== langCol && i !== avgCol && i !== coverCol && !/%/.test(c)
+                && body.length && body.every(r => Number.isFinite(RecTable.count(r[i]))));
+        if (!cols.length || !body.length)
+            return null;
+        const titles = cols.map(({ c }) => c.replace(/\s*[–—-]\s*reviews?$/i, '').replace(/\s*reviews?$/i, '').trim() || 'Title');
+        const langs = body.map(r => {
+            const counts = cols.map(({ i }) => RecTable.count(r[i]));
+            const valid = counts.map(n => (Number.isFinite(n) ? n : 0));
+            const cover = coverCol >= 0 ? MarketTable.support(r[coverCol]) : null;
+            return {
+                language: r[langCol].trim(),
+                counts: valid,
+                avg: valid.reduce((s, n) => s + n, 0) / valid.length,
+                sourceAvg: avgCol >= 0 ? RecTable.count(r[avgCol]) : NaN,
+                covered: cover === true,
+            };
+        }).filter(l => l.counts.some(n => n > 0));
+        return langs.length ? { project, titles, langs } : null;
+    }
+    /** Languages whose cell is shaded in a table pasted from Google Sheets or Excel (the HTML part of the clipboard). */
+    static shaded(html) {
+        const out = new Set();
+        try {
+            const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+            const plain = c => !c || /^(transparent|none|inherit|initial|#fff(fff)?|white|rgba?\(\s*255\s*,\s*255\s*,\s*255(\s*,\s*1)?\s*\)|rgba\(.*,\s*0\s*\))$/i.test(c.trim());
+            doc.querySelectorAll('tr').forEach(tr => {
+                const td = tr.querySelector('td,th');
+                if (!td)
+                    return;
+                const bg = td.style.backgroundColor || td.getAttribute('bgcolor') || '';
+                const name = td.textContent.trim();
+                if (name && !plain(bg) && !/^languages?$/i.test(name))
+                    out.add(Text.normalize(name));
+            });
+        }
+        catch (e) { /* no HTML on the clipboard: nothing shaded */ }
+        return out;
+    }
+}
+/** Steam's regional price recommendation, pasted from Steamworks (vertical list or one row per currency). */
+class RecPrices {
+    static METHODS = ['Exchange-rate conversion only', 'Purchasing power conversion only', 'Multi-variable conversion'];
+    /** Currency names as Steamworks prints them -> ISO code (also used to format revenue). */
+    static CURRENCIES = [
+        [/u\.?s\.? ?dollar|united states|^usd$/i, 'USD'], [/pound|sterling|^gbp$/i, 'GBP'], [/euro/i, 'EUR'], [/swiss/i, 'CHF'],
+        [/rub(le|el)/i, 'RUB'], [/zloty|z[łl]oty|polish/i, 'PLN'], [/brazil|real/i, 'BRL'], [/yen|japan/i, 'JPY'],
+        [/norw/i, 'NOK'], [/rupiah|indonesia/i, 'IDR'], [/ringgit|malays/i, 'MYR'], [/philippine|peso.*phil/i, 'PHP'],
+        [/singapore/i, 'SGD'], [/baht|thai/i, 'THB'], [/dong|vietnam/i, 'VND'], [/won|korea/i, 'KRW'],
+        [/hryvn|ukrain/i, 'UAH'], [/mexic/i, 'MXN'], [/canad/i, 'CAD'], [/austral/i, 'AUD'], [/new zealand/i, 'NZD'],
+        [/yuan|renminbi|chinese/i, 'CNY'], [/indian|rupee/i, 'INR'], [/chile/i, 'CLP'], [/peru|\bsol\b/i, 'PEN'],
+        [/colombia/i, 'COP'], [/south africa|\brand\b/i, 'ZAR'], [/hong kong/i, 'HKD'], [/taiwan/i, 'TWD'],
+        [/saudi|riyal/i, 'SAR'], [/emirat|dirham/i, 'AED'], [/israel|shekel/i, 'ILS'], [/kazakh|tenge/i, 'KZT'],
+        [/kuwait/i, 'KWD'], [/qatar/i, 'QAR'], [/costa rica|col[oó]n/i, 'CRC'], [/uruguay/i, 'UYU'], [/argentin/i, 'ARS'],
+        [/turk|lira/i, 'TRY'],
+    ];
+    static iso(name) {
+        const hit = RecPrices.CURRENCIES.find(([re]) => re.test(String(name || '')));
+        return hit ? hit[1] : '';
+    }
+    /** "€8,99" -> 8.99, "Rp 178 999" -> 178999, "260.000₫" -> 260000, "CLP$ 9.799" -> 9799, "S/.34.49" -> 34.49. */
+    static amount(text) {
+        const m = String(text || '').match(/\d(?:[\d.,]|\s(?=\d))*/);
+        if (!m)
+            return NaN;
+        const s = m[0].replace(/\s/g, '');
+        const last = Math.max(s.lastIndexOf('.'), s.lastIndexOf(','));
+        if (last < 0)
+            return Number(s);
+        const tail = s.length - last - 1;
+        if (tail === 3)
+            return Number(s.replace(/[.,]/g, ''));
+        return Number(s.slice(0, last).replace(/[.,]/g, '') + '.' + s.slice(last + 1));
+    }
+    static isPrice(line) { return /\d/.test(line) && !/conversion/i.test(line); }
+    /** { rows: [{ currency, iso, raw: [3], values: [3] }] }: values in the METHODS order. */
+    static parse(text) {
+        const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const rows = [];
+        const add = (currency, cells) => {
+            const raw = cells.slice(-3);
+            while (raw.length < 3)
+                raw.unshift('');
+            rows.push({ currency, iso: RecPrices.iso(currency), raw, values: raw.map(RecPrices.amount) });
+        };
+        let current = null, prices = [];
+        const flush = () => { if (current && prices.length) add(current, prices); current = null; prices = []; };
+        lines.forEach(line => {
+            const cells = line.split('\t').map(c => c.trim()).filter(Boolean);
+            if (cells.length >= 2 && !RecPrices.isPrice(cells[0]) && cells.slice(1).every(RecPrices.isPrice)) {
+                flush();
+                add(cells[0], cells.slice(1));
+                return;
+            }
+            if (/^(conversion method|currency)$/i.test(line) || /conversion( only)?$/i.test(line))
+                return;
+            if (RecPrices.isPrice(line) && current) {
+                prices.push(line);
+                if (prices.length === 3)
+                    flush();
+                return;
+            }
+            if (!RecPrices.isPrice(line)) {
+                flush();
+                current = line;
+            }
+        });
+        flush();
+        return { rows: rows.filter(r => r.values.some(Number.isFinite)) };
+    }
+}
+/** Which Steam currency a language's main market pays in. Eurozone and EU markets that Steam prices in euros share EUR. */
+class RecMarkets {
+    static RULES = [
+        [/english/i, 'USD'], [/chinese.*(trad|taiw|hk|hong)|trad.*chinese/i, 'TWD'], [/chinese|mandarin/i, 'CNY'],
+        [/portug.*bra|brazil/i, 'BRL'], [/spanish.*(lat|mex|america)|latam/i, 'MXN'], [/russian/i, 'RUB'], [/ukrain/i, 'UAH'],
+        [/japan/i, 'JPY'], [/korea/i, 'KRW'], [/polish/i, 'PLN'], [/norw/i, 'NOK'], [/thai/i, 'THB'], [/vietnam/i, 'VND'],
+        [/indones/i, 'IDR'], [/malay/i, 'MYR'], [/filipino|tagalog/i, 'PHP'], [/hindi/i, 'INR'], [/arabic/i, 'SAR'],
+        [/hebrew/i, 'ILS'], [/kazakh/i, 'KZT'],
+        [/german|french|spanish|italian|portug|dutch|finnish|greek|czech|hungar|roman|bulgar|swedish|danish|slovak|sloven|croat|lithuan|latvian|estonian/i, 'EUR'],
+    ];
+    static defaultFor(language) {
+        const hit = RecMarkets.RULES.find(([re]) => re.test(String(language || '')));
+        return hit ? hit[1] : '';
+    }
+}
+/** Everything the recommendation sections need. */
+class RecContext {
+    constructor({ meta, reviews, prices, basePrice, perReview, covered, currencyFor }) {
+        this.meta = meta;
+        this.titles = reviews.titles;
+        this.perReview = perReview;
+        this.basePrice = basePrice;
+        this.prices = prices.rows;
+        const byIso = new Map(this.prices.map(r => [r.iso, r]));
+        // USD needs no row: it is the base price itself.
+        const usdRow = byIso.get('USD') || (basePrice > 0 ? { currency: 'US Dollar', iso: 'USD', raw: ['', '', Fmt.money(basePrice, 'USD')], values: [basePrice, basePrice, basePrice] } : null);
+        if (usdRow)
+            byIso.set('USD', usdRow);
+        this.priceFor = iso => byIso.get(iso) || null;
+        this.langs = reviews.langs.map(l => {
+            const iso = currencyFor(l.language);
+            const row = iso ? byIso.get(iso) : null;
+            const multi = row ? row.values[2] : NaN;
+            const exch = row ? row.values[0] : NaN;
+            const usdPrice = iso === 'USD' ? basePrice : (basePrice > 0 && multi > 0 && exch > 0 ? basePrice * multi / exch : NaN);
+            const sales = l.avg * perReview;
+            return {
+                ...l,
+                covered: covered.has(Text.normalize(l.language)),
+                iso, row, multi,
+                usdPrice,
+                revenue: Number.isFinite(multi) ? sales * multi : NaN,
+                usd: Number.isFinite(usdPrice) ? sales * usdPrice : NaN,
+            };
+        });
+        this.priced = this.langs.filter(l => Number.isFinite(l.usd)).sort((a, b) => b.usd - a.usd);
+        this.unpriced = this.langs.filter(l => !Number.isFinite(l.usd));
+        this.total = this.priced.reduce((s, l) => s + l.usd, 0);
+        this.reviews = [];
+    }
+    get open() { return this.priced.filter(l => !l.covered); }
+    get coveredShare() { return this.total ? this.priced.filter(l => l.covered).reduce((s, l) => s + l.usd, 0) / this.total * 100 : 0; }
+    formula(n = this.perReview) { return `Potential revenue = average reviews per title × ${Fmt.int(n)} × regional price (multi-variable conversion)`; }
+}
+// ---------- Recommendation report sections ----------
+class RecSummarySection extends Section {
+    get eyebrow() { return 'Summary'; }
+    get numbered() { return false; }
+    get title() { return 'Where to [[localize next]]'; }
+    isAvailable() { return this.ctx.priced.length > 0; }
+    renderBody() {
+        const c = this.ctx, open = c.open.slice(0, 3);
+        const name = c.meta.gameTitle;
+        const out = [];
+        if (open.length) {
+            const lead = open[0];
+            out.push(`Among the languages ${name} does not cover yet, ${lead.language} has the highest potential revenue: about ${Fmt.money(lead.usd, 'USD', true)} before taxes and Steam's commission.`);
+            if (open.length > 1)
+                out.push(`${Words.list(open.slice(1).map(l => `${l.language} (${Fmt.money(l.usd, 'USD', true)})`))} follow.`);
+        }
+        else
+            out.push(`${name} already covers every language with a regional price in this analysis.`);
+        if (c.priced.some(l => l.covered))
+            out.push(`The languages already covered hold ${Fmt.pct(c.coveredShare)} of the potential across all ${Words.count(c.priced.length, 'language')}.`);
+        out.push(`Based on ${Words.count(c.titles.length, 'comparable title')} and Steam's price recommendation for a ${Fmt.money(c.basePrice, 'USD')} base price.`);
+        const kpis = Ui.kpis([
+            open[0] ? { value: open[0].language, label: 'Top language to add' } : null,
+            { value: Fmt.money(c.open.reduce((s, l) => s + l.usd, 0), 'USD', true), label: 'Potential in uncovered languages' },
+            { value: Fmt.int(c.titles.length), label: 'Comparable titles' },
+            { value: Fmt.money(c.basePrice, 'USD'), label: 'US base price' },
+        ]);
+        return Ui.block(`<p class="summary-text">${esc(out.join(' '))}</p>`) + kpis + RecSummarySection.formula(c);
+    }
+    /** The formula, stated in full on the summary page. */
+    static formula(c) {
+        return Ui.block(`<div class="formula">
+          <div class="block-label">How it is calculated</div>
+          <div class="formula-eq">${esc(c.formula())}</div>
+          <ul class="formula-parts">
+            <li><b>Average reviews per title</b> is the mean Steam review count in that language across the ${Words.count(c.titles.length, 'comparable title')}: ${esc(Words.list(c.titles))}.</li>
+            <li><b>${Fmt.int(c.perReview)}</b> is the number of copies sold per written review, a common rule of thumb for Steam games.</li>
+            <li><b>Regional price</b> is Steam's multi-variable recommendation for the language's main market, converted from a ${esc(Fmt.money(c.basePrice, 'USD'))} base price.</li>
+            <li>The result is revenue <b>before taxes and Steam's commission</b>. US dollar figures use Steam's own exchange-rate conversion from the same table.</li>
+          </ul>
+        </div>`);
+    }
+}
+class RecRevenueSection extends Section {
+    get eyebrow() { return 'Potential revenue'; }
+    get title() { return 'Every language, [[ranked]]'; }
+    get howToRead() { return 'Languages ranked by potential revenue in US dollars. Bars are scaled to the largest language. Covered languages are the ones the game already supports.'; }
+    isAvailable() { return this.ctx.priced.length > 0; }
+    renderBody() {
+        const c = this.ctx;
+        const max = Math.max(...c.priced.map(l => l.usd), 1);
+        const body = c.priced.map(l => `
+      <tr class="${l.covered ? 'covered' : 'open'}">
+        <td class="lang-name">${esc(l.language)}${l.covered ? '<small>Covered</small>' : ''}</td>
+        <td class="num">${Fmt.int(Math.round(l.avg))}</td>
+        <td class="num">${esc(l.row ? l.row.raw[2] : '')}<small>${esc(l.iso)}</small></td>
+        <td class="dist"><div class="dist-track"><i class="dist-fill${l.covered ? ' muted' : ''}" style="width:${(l.usd / max * 100).toFixed(3)}%"></i></div></td>
+        <td class="num">${Fmt.money(l.revenue, l.iso, true)}</td>
+        <td class="num share">${Fmt.money(l.usd, 'USD', true)}</td>
+      </tr>`).join('');
+        const th = (label, cls, num = false) => `<th class="${cls}${num ? ' num' : ''}">${esc(label)}</th>`;
+        const head = th('Language', 'c-lang') + th('Avg reviews', 'c-avg', true) + th('Regional price', 'c-price', true) + th('Potential', 'c-bar') + th('Local currency', 'c-local', true) + th('US dollars', 'c-usd', true);
+        const top = c.open[0];
+        const notes = [
+            `Potential revenue = average reviews × ${Fmt.int(c.perReview)} × regional price; before taxes and Steam's commission.`,
+            c.unpriced.length ? `Not ranked, no regional price matched: ${Words.list(c.unpriced.map(l => l.language))}.` : '',
+        ];
+        return Ui.block(Ui.chartHead(top ? `${top.language} is the largest uncovered market: ${Fmt.money(top.usd, 'USD', true)} potential revenue` : `${c.priced[0].language} has the largest potential revenue`, `Total across all ranked languages: ${Fmt.money(c.total, 'USD', true)}.`) + Ui.table(head, body, 'rec-revenue'), { splittable: true })
+            + notes.filter(Boolean).map(Ui.note).join('');
+    }
+}
+class RecReviewsSection extends Section {
+    get eyebrow() { return 'Comparable titles'; }
+    get title() { return 'Reviews per language on [[similar games]]'; }
+    get howToRead() { return 'Steam reviews written in each language on each comparable title, with the average per title used in the formula.'; }
+    renderBody() {
+        const c = this.ctx;
+        const rows = [...c.langs].sort((a, b) => b.avg - a.avg);
+        const body = rows.map(l => `
+      <tr class="${l.covered ? 'covered' : ''}">
+        <td class="lang-name">${esc(l.language)}${l.covered ? '<small>Covered</small>' : ''}</td>
+        ${l.counts.map(n => `<td class="num">${Fmt.int(n)}</td>`).join('')}
+        <td class="num share">${Fmt.int(Math.round(l.avg))}</td>
+      </tr>`).join('');
+        const head = `<th class="c-lang">Language</th>${c.titles.map(t => `<th class="num">${esc(t)}</th>`).join('')}<th class="num c-avg">Average per title</th>`;
+        const off = c.langs.filter(l => Number.isFinite(l.sourceAvg) && l.sourceAvg > 0 && Math.abs(Math.round(l.avg) - l.sourceAvg) > 1);
+        return Ui.block(Ui.table(head, body, `rec-reviews cols-${Math.min(c.titles.length, 8)}`), { splittable: true })
+            + (off.length ? Ui.note(`The pasted average differs from the recalculated one for ${Words.list(off.map(l => l.language))}; this report uses the recalculated average.`) : '');
+    }
+}
+class RecPricesSection extends Section {
+    get eyebrow() { return 'Regional prices'; }
+    get title() { return "Steam's [[price recommendation]]"; }
+    get howToRead() { return `Steam's three conversions of a ${Fmt.money(this.ctx.basePrice, 'USD')} base price for each currency the languages use. The multi-variable price is the one in the formula.`; }
+    isAvailable() { return this.ctx.priced.length > 0; }
+    renderBody() {
+        const c = this.ctx;
+        const used = new Map();
+        c.priced.forEach(l => { if (!used.has(l.iso)) used.set(l.iso, []); used.get(l.iso).push(l.language); });
+        const body = [...used.entries()].map(([iso, langs]) => {
+            const r = c.priceFor(iso), usd = langs.map(n => c.langs.find(l => l.language === n))[0].usdPrice;
+            return `<tr>
+          <td class="lang-name">${esc(r.currency)}<small>${esc(Words.list(langs))}</small></td>
+          ${r.raw.map((v, i) => `<td class="num${i === 2 ? ' share' : ''}">${esc(v)}</td>`).join('')}
+          <td class="num">${Fmt.money(usd, 'USD')}</td>
+        </tr>`;
+        }).join('');
+        const head = `<th class="c-lang">Currency and languages</th>${RecPrices.METHODS.map(m => `<th class="num">${esc(m.replace(' conversion', '').replace(' only', ''))}</th>`).join('')}<th class="num">Multi-variable in USD</th>`;
+        return Ui.block(Ui.table(head, body, 'rec-prices'), { splittable: true });
+    }
+}
+class RecMethodSection extends Section {
+    get eyebrow() { return 'Method and limits'; }
+    get appendix() { return 'A'; }
+    get title() { return 'How to read [[these numbers]]'; }
+    renderBody() {
+        const c = this.ctx;
+        return Ui.cards([
+            { title: 'The formula', body: [c.formula(), 'Each language is priced in its main Steam market: English in US dollars, the languages of euro markets in euros, Simplified Chinese in yuan, and so on.'] },
+            { title: 'Why reviews', body: `Review counts on comparable games show how many players buy and play in each language. Multiplying by ${Fmt.int(c.perReview)} turns reviews into estimated copies sold; the true ratio varies by genre, price and year.` },
+            { title: 'What it leaves out', body: 'Value-added tax and Steam\'s revenue share are not deducted, nor are refunds, discounts, bundles or the cost of localizing. Treat the figures as a ranking and an order of magnitude, not a forecast.' },
+            { title: 'US dollar figures', body: `Steam's multi-variable price divided by its exchange-rate price, times the ${Fmt.money(c.basePrice, 'USD')} base price. Both come from the same pasted table, so no outside exchange rates are used.` },
+        ], 2);
+    }
+}
+class RecCoverPage extends CoverPage {
+    get eyebrow() { return 'Language recommendations · Steam'; }
+    get lede() { return `Potential revenue per language from ${Words.count(this.analysis.titles.length, 'comparable title')} and Steam's regional price recommendation.`; }
+    get metaItems() { return [['Base price', Fmt.money(this.analysis.basePrice, 'USD')], ['Sales per review', Fmt.int(this.analysis.perReview)]]; }
+}
+const REC_SECTION_REGISTRY = [RecSummarySection, RecRevenueSection, RecReviewsSection, RecPricesSection, RecMethodSection];
+class RecDocument {
+    constructor(ctx) { this.ctx = ctx; }
+    mount(container) {
+        container.innerHTML = '';
+        [new RecCoverPage(this.ctx.meta, this.ctx).render(), new ReportBody(this.ctx, REC_SECTION_REGISTRY).render()].forEach(n => container.appendChild(n));
+    }
+}
+/** The Language recommendations form: two pastes, base price, sales per review, covered languages, currency per language. */
+class RecForm {
+    constructor(doc = document) {
+        const $ = id => doc.getElementById(id);
+        this.f = { reviews: $('r-reviews'), prices: $('r-prices'), project: $('r-project'), publisher: $('r-publisher'), base: $('r-base'), perReview: $('r-perReview') };
+        this.reviewsNote = $('r-reviewsNote');
+        this.pricesNote = $('r-pricesNote');
+        this.langBox = $('r-langs');
+        this.shaded = new Set();
+        this.covered = new Set();
+        this.currency = new Map();
+    }
+    init() {
+        // A paste from Google Sheets or Excel also carries cell colours: shaded language cells mark covered languages.
+        this.f.reviews.addEventListener('paste', e => {
+            const html = e.clipboardData && e.clipboardData.getData('text/html');
+            this.shaded = html ? RecReviews.shaded(html) : new Set();
+            this.fromPaste = this.shaded.size > 0;
+        });
+        this.f.reviews.addEventListener('input', () => this.refresh(true));
+        this.f.prices.addEventListener('input', () => this.refresh());
+        [this.f.base, this.f.perReview].forEach(el => el.addEventListener('input', () => this.refresh()));
+    }
+    get reviews() { return RecReviews.parse(this.f.reviews.value); }
+    get prices() { return RecPrices.parse(this.f.prices.value); }
+    get basePrice() { return RecPrices.amount(this.f.base.value); }
+    get perReview() { const n = Number(String(this.f.perReview.value).replace(',', '.')); return n > 0 ? n : 30; }
+    refresh(newReviews = false) {
+        const reviews = this.reviews, prices = this.prices;
+        const note = (el, text, kind) => { el.textContent = text; el.className = 'field-note' + (kind ? ' ' + kind : ''); };
+        if (!this.f.reviews.value.trim())
+            note(this.reviewsNote, '');
+        else if (!reviews)
+            note(this.reviewsNote, 'No table found yet. Include the header row (Language, then one "... Reviews" column per title).', 'warn');
+        else {
+            if (newReviews) {
+                if (reviews.project && !this.f.project.value.trim())
+                    this.f.project.value = reviews.project;
+                const fromCol = reviews.langs.filter(l => l.covered).map(l => Text.normalize(l.language));
+                this.covered = new Set(this.shaded.size ? [...this.shaded] : fromCol);
+            }
+            note(this.reviewsNote, `Read ${Words.count(reviews.langs.length, 'language')} across ${Words.count(reviews.titles.length, 'title')}: ${Words.list(reviews.titles)}.${this.shaded.size && newReviews ? ` Shaded cells marked ${Words.count(this.covered.size, 'covered language')}; adjust below.` : ''}`, 'ok');
+        }
+        if (!this.f.prices.value.trim())
+            note(this.pricesNote, '');
+        else if (!prices.rows.length)
+            note(this.pricesNote, 'No prices found yet. Paste the whole table from Steamworks, from "Conversion Method" to the last currency.', 'warn');
+        else {
+            const unknown = prices.rows.filter(r => !r.iso).map(r => r.currency);
+            note(this.pricesNote, `Read ${Fmt.int(prices.rows.length)} ${prices.rows.length === 1 ? 'currency' : 'currencies'} with three conversions each.${unknown.length ? ` Not recognised: ${Words.list(unknown)}.` : ''}${this.basePrice > 0 ? '' : ' Enter the US base price you gave Steam, so the report can compare currencies.'}`, unknown.length || !(this.basePrice > 0) ? 'warn' : 'ok');
+        }
+        this.renderLangs(reviews, prices);
+    }
+    /** One row per language: covered tick, the currency its revenue uses, and the resulting regional price. */
+    renderLangs(reviews, prices) {
+        if (!reviews) {
+            this.langBox.innerHTML = '';
+            return;
+        }
+        const options = [...new Map([['USD', 'US Dollar'], ...prices.rows.filter(r => r.iso).map(r => [r.iso, r.currency])]).entries()];
+        this.langBox.innerHTML = `
+      <div class="rec-lang-head"><span>Language</span><span>Already covered</span><span>Priced in</span><span>Regional price</span></div>
+      ${reviews.langs.map((l, i) => {
+            const key = Text.normalize(l.language);
+            const iso = this.currencyFor(l.language, options);
+            const row = prices.rows.find(r => r.iso === iso);
+            const price = iso === 'USD' ? (this.basePrice > 0 ? Fmt.money(this.basePrice, 'USD') : 'base price') : row ? row.raw[2] : 'no price';
+            return `<div class="rec-lang-row">
+          <span class="nm">${esc(l.language)}</span>
+          <label class="tick"><input type="checkbox" data-k="${esc(key)}"${this.covered.has(key) ? ' checked' : ''}> Covered</label>
+          <select data-k="${esc(key)}"><option value="">None</option>${options.map(([code, name]) => `<option value="${code}"${code === iso ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select>
+          <span class="pr${row || iso === 'USD' ? '' : ' missing'}">${esc(price)}</span>
+        </div>`;
+        }).join('')}`;
+        this.langBox.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => { cb.checked ? this.covered.add(cb.dataset.k) : this.covered.delete(cb.dataset.k); }));
+        this.langBox.querySelectorAll('select').forEach(sel => sel.addEventListener('change', () => { this.currency.set(sel.dataset.k, sel.value); this.renderLangs(this.reviews, this.prices); }));
+    }
+    currencyFor(language, options = null) {
+        const key = Text.normalize(language);
+        if (this.currency.has(key))
+            return this.currency.get(key);
+        const iso = RecMarkets.defaultFor(language);
+        return !options || options.some(([code]) => code === iso) ? iso : '';
+    }
+    validate() {
+        if (!this.reviews)
+            return { field: this.f.reviews, message: 'Paste the reviews table of the comparable titles first.' };
+        if (!this.prices.rows.length)
+            return { field: this.f.prices, message: "Paste Steam's price recommendation table." };
+        if (!(this.basePrice > 0))
+            return { field: this.f.base, message: 'Enter the US base price you gave Steam (for example 9.99).' };
+        return null;
+    }
+    values() {
+        const reviews = this.reviews, prices = this.prices;
+        return {
+            meta: { gameTitle: this.f.project.value.trim() || reviews.project || 'Your game', publisher: this.f.publisher.value.trim(), platform: 'Steam' },
+            reviews, prices,
+            basePrice: this.basePrice,
+            perReview: this.perReview,
+            covered: new Set(this.covered),
+            currencyFor: lang => this.currencyFor(lang, [['USD'], ...prices.rows.map(r => [r.iso])]),
+        };
+    }
+}
 class App {
+    static REVIEWS_MODE_KEY = 'allcorrect.reviewsIn.v1';
+    static TOOL_KEY = 'allcorrect.tool.v1';
+    static TOOLS = { sentiment: 'Sentiment report', langrec: 'Language recommendations' };
     constructor() {
         this.dataset = null;
         this.fileName = '';
+        this.kind = '';
+    }
+    /** Shows one tool's form. The generated report is cleared, since it belongs to the other tool. */
+    setTool(tool) {
+        const t = App.TOOLS[tool] ? tool : 'sentiment';
+        this.tool.value = t;
+        document.getElementById('setupPanel').hidden = t !== 'sentiment';
+        document.getElementById('recPanel').hidden = t !== 'langrec';
+        this.reviewsMode.closest('.print-control').hidden = t !== 'sentiment';
+        document.title = `Allcorrect ${App.TOOLS[t]}`;
+        if (this.kind && this.kind !== t) {
+            this.reportEl.innerHTML = '';
+            this.kind = '';
+            this.downloadBtn.disabled = true;
+            this.saveHtmlBtn.disabled = true;
+        }
+        try { localStorage.setItem(App.TOOL_KEY, t); }
+        catch (e) { /* not remembered */ }
+        if (location.hash !== (t === 'langrec' ? '#language-recommendations' : '') && history.replaceState)
+            history.replaceState(null, '', t === 'langrec' ? '#language-recommendations' : location.pathname + location.search);
+    }
+    generateRec() {
+        const problem = this.recForm.validate();
+        if (problem) {
+            this.recStatus.set(problem.message, 'error');
+            problem.field.focus();
+            return;
+        }
+        const ctx = new RecContext(this.recForm.values());
+        new RecDocument(ctx).mount(this.reportEl);
+        this.kind = 'langrec';
+        this.title = ctx.meta.gameTitle;
+        this.downloadBtn.disabled = false;
+        this.saveHtmlBtn.disabled = false;
+        this.recStatus.set(ctx.unpriced.length ? `Report generated. No regional price for ${Words.list(ctx.unpriced.map(l => l.language))}; pick a currency for them under Step 03 to include them.` : 'Report generated.', ctx.unpriced.length ? 'warn' : 'ok');
+        this.reportEl.scrollIntoView({ behavior: 'smooth' });
     }
     init() {
         const $ = id => document.getElementById(id);
@@ -3382,8 +3908,19 @@ class App {
         this.downloadBtn = $('downloadBtn');
         this.saveHtmlBtn = $('saveHtmlBtn');
         this.reportEl = $('report');
-        this.printMode = $('printMode');
         this.printTheme = $('printTheme');
+        // Where the source reviews go: saved HTML only (default), HTML and PDF, or neither. Remembered in this browser.
+        this.reviewsMode = $('reviewsMode');
+        try {
+            const saved = localStorage.getItem(App.REVIEWS_MODE_KEY);
+            if (saved && this.reviewsMode.querySelector(`option[value="${saved}"]`))
+                this.reviewsMode.value = saved;
+        }
+        catch (e) { /* storage blocked: keep the default */ }
+        this.reviewsMode.addEventListener('change', () => {
+            try { localStorage.setItem(App.REVIEWS_MODE_KEY, this.reviewsMode.value); }
+            catch (e) { /* not remembered, still used now */ }
+        });
         this.status = new StatusLine($('statusLine'));
         this.form = new ReportForm();
         this.printer = new PrintController();
@@ -3412,6 +3949,17 @@ class App {
         this.generateBtn.addEventListener('click', () => this.generate());
         this.downloadBtn.addEventListener('click', () => this.print());
         this.saveHtmlBtn.addEventListener('click', () => this.saveHtml());
+        // Second tool: language recommendations.
+        this.recForm = new RecForm();
+        this.recForm.init();
+        this.recStatus = new StatusLine($('recStatusLine'));
+        $('recGenerateBtn').addEventListener('click', () => this.generateRec());
+        this.tool = $('toolSelect');
+        this.tool.addEventListener('change', () => this.setTool(this.tool.value));
+        let start = location.hash === '#language-recommendations' ? 'langrec' : '';
+        try { start = start || localStorage.getItem(App.TOOL_KEY) || ''; }
+        catch (e) { /* default tool */ }
+        this.setTool(start || 'sentiment');
     }
     loadFile(file) {
         this.fileName = file.name;
@@ -3442,12 +3990,10 @@ class App {
         label.textContent = `Loaded ${fileName}: ${source}`;
         if (!this.dropzone.contains(label))
             this.dropzone.appendChild(label);
-        const reviewsOption = this.printMode.querySelector('option[value="report-reviews"]');
-        if (reviewsOption) {
-            reviewsOption.disabled = dataset.reviews.length === 0;
-            if (!dataset.reviews.length && this.printMode.value === 'report-reviews')
-                this.printMode.value = 'report';
-        }
+        // A workbook with no individual review rows has nothing to include.
+        this.reviewsMode.querySelectorAll('option[value="html"],option[value="both"]').forEach(o => { o.disabled = dataset.reviews.length === 0; });
+        if (!dataset.reviews.length)
+            this.reviewsMode.value = 'none';
         const analysis = new SentimentAnalysis(dataset.aggregateRows, dataset.statusDefs);
         const explicit = dataset.metadata.usefulCount;
         const notes = [];
@@ -3505,6 +4051,7 @@ class App {
             allTitles: this.form.titles,
         });
         new ReportDocument(ctx).mount(this.reportEl);
+        this.kind = 'sentiment';
         const warnings = ctx.warnings();
         this.status.set(warnings.length ? warnings.join(' ') : 'Report generated.', warnings.length ? 'warn' : 'ok');
         this.downloadBtn.disabled = false;
@@ -3512,27 +4059,34 @@ class App {
         this.title = input.meta.gameTitle;
         this.reportEl.scrollIntoView({ behavior: 'smooth' });
     }
+    get activeStatus() { return this.kind === 'langrec' ? this.recStatus : this.status; }
     print() {
-        if (!this.dataset || !this.reportEl.children.length)
-            return this.status.set('Generate the report before printing.', 'error');
-        this.printer.print(this.printMode.value, this.title || 'Sentiment Report', this.printTheme.value);
+        if (!this.kind || !this.reportEl.children.length)
+            return this.activeStatus.set('Generate the report before printing.', 'error');
+        const withReviews = this.kind === 'sentiment' && this.reviewsMode.value === 'both';
+        this.printer.print(withReviews ? 'report-reviews' : 'report', this.title || 'Sentiment Report', this.printTheme.value);
     }
     async saveHtml() {
-        if (!this.dataset || !this.reportEl.children.length)
-            return this.status.set('Generate the report before saving it.', 'error');
+        if (!this.kind || !this.reportEl.children.length)
+            return this.activeStatus.set('Generate the report before saving it.', 'error');
         const btn = this.saveHtmlBtn;
         btn.disabled = true;
         try {
+            const rec = this.kind === 'langrec';
             const { name, bytes } = await HtmlExporter.download(this.reportEl, {
                 title: this.title || 'Sentiment Report',
-                includeReviews: this.printMode.value === 'report-reviews',
+                includeReviews: !rec && this.reviewsMode.value !== 'none',
                 theme: this.printTheme.value,
+                suffix: rec ? 'language-recommendations' : 'sentiment-report',
             });
-            this.status.set(`Saved ${name} (${(bytes / 1048576).toFixed(1)} MB). It opens in any browser, works offline and can be printed to PDF.`, 'ok');
+            if (rec)
+                return this.recStatus.set(`Saved ${name} (${(bytes / 1048576).toFixed(1)} MB). It opens in any browser, works offline and can be printed to PDF.`, 'ok');
+            const withReviews = this.reviewsMode.value !== 'none' && this.dataset.reviews.length;
+            this.status.set(`Saved ${name} (${(bytes / 1048576).toFixed(1)} MB)${withReviews ? `, with all ${Fmt.int(this.dataset.reviews.length)} source reviews` : ', report only'}. It opens in any browser, works offline and can be printed to PDF.`, 'ok');
         }
         catch (err) {
             console.error(err);
-            this.status.set('Could not save the HTML file: ' + err.message, 'error');
+            this.activeStatus.set('Could not save the HTML file: ' + err.message, 'error');
         }
         finally {
             btn.disabled = false;
