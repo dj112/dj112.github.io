@@ -1596,3 +1596,16 @@ input[type="file"]{ display:none; }
 .rec-paste summary:hover{ color:var(--blue); }
 .rec-paste .hint{ margin:4px 0 0; }
 @media screen and (max-width:860px){ .rec-add{ flex-direction:column; } }
+
+.tbl.rec-reviews thead th a,.formula-parts a,.rec-method a{ color:var(--blue); text-decoration:none; }
+.tbl.rec-reviews thead th a:hover,.formula-parts a:hover,.rec-method a:hover{ text-decoration:underline; }
+.rec-method .info-card p{ overflow-wrap:anywhere; }
+.rec-method .info-card p + p{ margin-top:var(--sp-2); }
+.rec-sources{ margin:0; padding-left:1.1em; display:grid; gap:6px; font-size:13px; line-height:1.5; color:var(--text-dim); }
+@media print{
+  .tbl.rec-reviews thead th a,.formula-parts a,.rec-method a{ text-decoration:underline; text-underline-offset:2px; }
+}
+
+.block-kicker.rec-only{ margin-bottom:var(--sp-3); }
+.tbl td.nowrap{ white-space:nowrap; }
+.tbl.rec-reviews thead th.num{ overflow-wrap:break-word; hyphens:auto; }

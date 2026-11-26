@@ -3584,9 +3584,19 @@ class RecMarkets {
 }
 /** Everything the recommendation sections need. */
 class RecContext {
+    /** Sources the appendix links to. */
+    static SOURCES = {
+        pricing: { label: 'Steamworks: Pricing', url: 'https://partner.steamgames.com/doc/store/pricing' },
+        explorer: { label: 'Steamworks: Pricing explorer', url: 'https://partner.steamgames.com/pricing/explorer' },
+        currencies: { label: 'Steamworks: Supported currencies', url: 'https://partner.steamgames.com/doc/store/pricing/currencies' },
+        reviewsApi: { label: 'Steamworks: User reviews API', url: 'https://partner.steamgames.com/doc/store/getreviews' },
+        nbNumber: { label: "GameDiscoverCo: How that game sold on Steam, using the 'NB number'", url: 'https://newsletter.gamediscover.co/p/how-that-game-sold-on-steam-using' },
+    };
+    static link(label, url) { return url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : esc(label); }
     constructor({ meta, reviews, prices, basePrice, perReview, covered, currencyFor }) {
         this.meta = meta;
         this.titles = reviews.titles;
+        this.links = reviews.links || [];
         this.perReview = perReview;
         this.basePrice = basePrice;
         this.prices = prices.rows;
@@ -3605,6 +3615,7 @@ class RecContext {
             const sales = l.avg * perReview;
             return {
                 ...l,
+                english: RecContext.isEnglish(l.language),
                 covered: covered.has(RecMarkets.key(l.language)),
                 iso, row, multi,
                 usdPrice,
@@ -3612,16 +3623,41 @@ class RecContext {
                 usd: Number.isFinite(usdPrice) ? sales * usdPrice : NaN,
             };
         });
-        this.priced = this.langs.filter(l => Number.isFinite(l.usd)).sort((a, b) => b.usd - a.usd);
-        this.unpriced = this.langs.filter(l => !Number.isFinite(l.usd));
+        // English is the base market; the charts and totals compare the languages a localization adds.
+        this.priced = this.langs.filter(l => !l.english && Number.isFinite(l.usd)).sort((a, b) => b.usd - a.usd);
+        this.unpriced = this.langs.filter(l => !l.english && !Number.isFinite(l.usd));
+        this.english = this.langs.find(l => l.english) || null;
         this.total = this.priced.reduce((s, l) => s + l.usd, 0);
         this.reviews = [];
     }
+    static isEnglish(language) { return /^english\b/i.test(String(language || '').trim()); }
     get open() { return this.priced.filter(l => !l.covered); }
     get coveredShare() { return this.total ? this.priced.filter(l => l.covered).reduce((s, l) => s + l.usd, 0) / this.total * 100 : 0; }
     formula(n = this.perReview) { return `Potential revenue = average reviews per title × ${Fmt.int(n)} × regional price (multi-variable conversion)`; }
+    /** Game name linked to its Steam store page when known. */
+    titleHtml(i) { return RecContext.link(this.titles[i], this.links[i]); }
+    titlesHtml() { return Words.list(this.titles.map((t, i) => `\u0000${i}\u0000`)).replace(/\u0000(\d+)\u0000/g, (_, i) => this.titleHtml(Number(i))); }
 }
 // ---------- Recommendation report sections ----------
+class RecReviewsSection extends Section {
+    get eyebrow() { return 'Comparable titles'; }
+    get title() { return 'Reviews per language on [[similar games]]'; }
+    renderBody() {
+        const c = this.ctx;
+        const rows = c.langs.filter(l => !l.english).sort((a, b) => b.avg - a.avg);
+        const body = rows.map(l => `
+      <tr class="${l.covered ? 'covered' : ''}">
+        <td class="lang-name">${esc(l.language)}${l.covered ? '<small>Covered</small>' : ''}</td>
+        ${l.counts.map(n => `<td class="num">${Fmt.int(n)}</td>`).join('')}
+        <td class="num share">${Fmt.int(Math.round(l.avg))}</td>
+      </tr>`).join('');
+        const head = `<th class="c-lang">Language</th>${c.titles.map((t, i) => `<th class="num">${c.titleHtml(i)}</th>`).join('')}<th class="num c-avg">Average per title</th>`;
+        const off = rows.filter(l => Number.isFinite(l.sourceAvg) && l.sourceAvg > 0 && Math.abs(Math.round(l.avg) - l.sourceAvg) > 1);
+        const intro = '<div class="block-kicker rec-only">Non-English languages only. English is the base market at the US price, so this table and the ranking compare the languages a localization adds.</div>';
+        return Ui.block(intro + Ui.table(head, body, `rec-reviews cols-${Math.min(c.titles.length, 8)}`), { splittable: true })
+            + (off.length ? Ui.note(`The pasted average differs from the recalculated one for ${Words.list(off.map(l => l.language))}; this report uses the recalculated average.`) : '');
+    }
+}
 class RecSummarySection extends Section {
     get eyebrow() { return 'Summary'; }
     get numbered() { return false; }
@@ -3638,9 +3674,9 @@ class RecSummarySection extends Section {
                 out.push(`${Words.list(open.slice(1).map(l => `${l.language} (${Fmt.money(l.usd, 'USD', true)})`))} follow.`);
         }
         else
-            out.push(`${name} already covers every language with a regional price in this analysis.`);
+            out.push(`${name} already covers every non-English language with a regional price in this analysis.`);
         if (c.priced.some(l => l.covered))
-            out.push(`The languages already covered hold ${Fmt.pct(c.coveredShare)} of the potential across all ${Words.count(c.priced.length, 'language')}.`);
+            out.push(`The languages already covered hold ${Fmt.pct(c.coveredShare)} of the non-English potential across ${Words.count(c.priced.length, 'language')}.`);
         out.push(`Based on ${Words.count(c.titles.length, 'comparable title')} and Steam's price recommendation for a ${Fmt.money(c.basePrice, 'USD')} base price.`);
         const kpis = Ui.kpis([
             open[0] ? { value: open[0].language, label: 'Top language to add' } : null,
@@ -3656,8 +3692,8 @@ class RecSummarySection extends Section {
           <div class="block-label">How it is calculated</div>
           <div class="formula-eq">${esc(c.formula())}</div>
           <ul class="formula-parts">
-            <li><b>Average reviews per title</b> is the mean Steam review count in that language across the ${Words.count(c.titles.length, 'comparable title')}: ${esc(Words.list(c.titles))}.</li>
-            <li><b>${Fmt.int(c.perReview)}</b> is the number of copies sold per written review, a common rule of thumb for Steam games.</li>
+            <li><b>Average reviews per title</b> is the mean Steam review count in that language across the ${Words.count(c.titles.length, 'comparable title')}: ${c.titlesHtml()}.</li>
+            <li><b>${Fmt.int(c.perReview)}</b> turns written reviews into estimated copies sold; Appendix A explains the ratio.</li>
             <li><b>Regional price</b> is Steam's multi-variable recommendation for the language's main market, converted from a ${esc(Fmt.money(c.basePrice, 'USD'))} base price.</li>
             <li>The result is revenue <b>before taxes and Steam's commission</b>. US dollar figures use Steam's own exchange-rate conversion from the same table.</li>
           </ul>
@@ -3667,7 +3703,7 @@ class RecSummarySection extends Section {
 class RecRevenueSection extends Section {
     get eyebrow() { return 'Potential revenue'; }
     get title() { return 'Every language, [[ranked]]'; }
-    get howToRead() { return 'Languages ranked by potential revenue in US dollars. Bars are scaled to the largest language. Covered languages are the ones the game already supports.'; }
+    get howToRead() { return 'Non-English languages ranked by potential revenue in US dollars. Bars are scaled to the largest language. Covered languages are the ones the game already supports.'; }
     isAvailable() { return this.ctx.priced.length > 0; }
     renderBody() {
         const c = this.ctx;
@@ -3676,7 +3712,7 @@ class RecRevenueSection extends Section {
       <tr class="${l.covered ? 'covered' : 'open'}">
         <td class="lang-name">${esc(l.language)}${l.covered ? '<small>Covered</small>' : ''}</td>
         <td class="num">${Fmt.int(Math.round(l.avg))}</td>
-        <td class="num">${esc(l.row ? l.row.raw[2] : '')}<small>${esc(l.iso)}</small></td>
+        <td class="num nowrap">${esc(l.row ? l.row.raw[2] : '')}</td>
         <td class="dist"><div class="dist-track"><i class="dist-fill${l.covered ? ' muted' : ''}" style="width:${(l.usd / max * 100).toFixed(3)}%"></i></div></td>
         <td class="num">${Fmt.money(l.revenue, l.iso, true)}</td>
         <td class="num share">${Fmt.money(l.usd, 'USD', true)}</td>
@@ -3688,62 +3724,63 @@ class RecRevenueSection extends Section {
             `Potential revenue = average reviews × ${Fmt.int(c.perReview)} × regional price; before taxes and Steam's commission.`,
             c.unpriced.length ? `Not ranked, no regional price matched: ${Words.list(c.unpriced.map(l => l.language))}.` : '',
         ];
-        return Ui.block(Ui.chartHead(top ? `${top.language} is the largest uncovered market: ${Fmt.money(top.usd, 'USD', true)} potential revenue` : `${c.priced[0].language} has the largest potential revenue`, `Total across all ranked languages: ${Fmt.money(c.total, 'USD', true)}.`) + Ui.table(head, body, 'rec-revenue'), { splittable: true })
+        const kicker = `Non-English languages only, ${Fmt.money(c.total, 'USD', true)} in total.${c.english && Number.isFinite(c.english.usd) ? ` For scale, English on its own comes to ${Fmt.money(c.english.usd, 'USD', true)}.` : ''}`;
+        return Ui.block(Ui.chartHead(top ? `${top.language} is the largest uncovered market: ${Fmt.money(top.usd, 'USD', true)} potential revenue` : `${c.priced[0].language} has the largest potential revenue`, kicker) + Ui.table(head, body, 'rec-revenue'), { splittable: true })
             + notes.filter(Boolean).map(Ui.note).join('');
     }
 }
-class RecReviewsSection extends Section {
-    get eyebrow() { return 'Comparable titles'; }
-    get title() { return 'Reviews per language on [[similar games]]'; }
-    get howToRead() { return 'Steam reviews written in each language on each comparable title, with the average per title used in the formula.'; }
-    renderBody() {
-        const c = this.ctx;
-        const rows = [...c.langs].sort((a, b) => b.avg - a.avg);
-        const body = rows.map(l => `
-      <tr class="${l.covered ? 'covered' : ''}">
-        <td class="lang-name">${esc(l.language)}${l.covered ? '<small>Covered</small>' : ''}</td>
-        ${l.counts.map(n => `<td class="num">${Fmt.int(n)}</td>`).join('')}
-        <td class="num share">${Fmt.int(Math.round(l.avg))}</td>
-      </tr>`).join('');
-        const head = `<th class="c-lang">Language</th>${c.titles.map(t => `<th class="num">${esc(t)}</th>`).join('')}<th class="num c-avg">Average per title</th>`;
-        const off = c.langs.filter(l => Number.isFinite(l.sourceAvg) && l.sourceAvg > 0 && Math.abs(Math.round(l.avg) - l.sourceAvg) > 1);
-        return Ui.block(Ui.table(head, body, `rec-reviews cols-${Math.min(c.titles.length, 8)}`), { splittable: true })
-            + (off.length ? Ui.note(`The pasted average differs from the recalculated one for ${Words.list(off.map(l => l.language))}; this report uses the recalculated average.`) : '');
-    }
-}
-class RecPricesSection extends Section {
-    get eyebrow() { return 'Regional prices'; }
-    get title() { return "Steam's [[price recommendation]]"; }
-    get howToRead() { return `Steam's three conversions of a ${Fmt.money(this.ctx.basePrice, 'USD')} base price for each currency the languages use. The multi-variable price is the one in the formula.`; }
-    isAvailable() { return this.ctx.priced.length > 0; }
-    renderBody() {
-        const c = this.ctx;
-        const used = new Map();
-        c.priced.forEach(l => { if (!used.has(l.iso)) used.set(l.iso, []); used.get(l.iso).push(l.language); });
-        const body = [...used.entries()].map(([iso, langs]) => {
-            const r = c.priceFor(iso), usd = langs.map(n => c.langs.find(l => l.language === n))[0].usdPrice;
-            return `<tr>
-          <td class="lang-name">${esc(r.currency)}<small>${esc(Words.list(langs))}</small></td>
-          ${r.raw.map((v, i) => `<td class="num${i === 2 ? ' share' : ''}">${esc(v)}</td>`).join('')}
-          <td class="num">${Fmt.money(usd, 'USD')}</td>
-        </tr>`;
-        }).join('');
-        const head = `<th class="c-lang">Currency and languages</th>${RecPrices.METHODS.map(m => `<th class="num">${esc(m.replace(' conversion', '').replace(' only', ''))}</th>`).join('')}<th class="num">Multi-variable in USD</th>`;
-        return Ui.block(Ui.table(head, body, 'rec-prices'), { splittable: true });
-    }
-}
 class RecMethodSection extends Section {
-    get eyebrow() { return 'Method and limits'; }
+    get eyebrow() { return 'Method and sources'; }
     get appendix() { return 'A'; }
     get title() { return 'How to read [[these numbers]]'; }
-    renderBody() {
+    /** One worked example: what the same 1,000 copies bring in at each language's regional price. */
+    example() {
         const c = this.ctx;
-        return Ui.cards([
-            { title: 'The formula', body: [c.formula(), 'Each language is priced in its main Steam market: English in US dollars, the languages of euro markets in euros, Simplified Chinese in yuan, and so on.'] },
-            { title: 'Why reviews', body: `Review counts on comparable games show how many players buy and play in each language. Multiplying by ${Fmt.int(c.perReview)} turns reviews into estimated copies sold; the true ratio varies by genre, price and year.` },
-            { title: 'What it leaves out', body: 'Value-added tax and Steam\'s revenue share are not deducted, nor are refunds, discounts, bundles or the cost of localizing. Treat the figures as a ranking and an order of magnitude, not a forecast.' },
-            { title: 'US dollar figures', body: `Steam's multi-variable price divided by its exchange-rate price, times the ${Fmt.money(c.basePrice, 'USD')} base price. Both come from the same pasted table, so no outside exchange rates are used.` },
-        ], 2);
+        const byPrice = [...c.priced].filter(l => l.usdPrice > 0).sort((a, b) => b.usdPrice - a.usdPrice);
+        if (byPrice.length < 2)
+            return '';
+        const hi = byPrice[0], lo = byPrice[byPrice.length - 1];
+        const copies = 1000;
+        const line = l => `${l.language} at ${l.row.raw[2]} (about ${Fmt.money(l.usdPrice, 'USD')}) brings ${Fmt.money(copies * l.usdPrice, 'USD')}`;
+        const flip = c.priced.find((a, i) => c.priced.slice(i + 1).some(b => b.avg > a.avg));
+        const flipped = flip && c.priced.slice(c.priced.indexOf(flip) + 1).find(b => b.avg > flip.avg);
+        return `The same ${Fmt.int(copies)} copies are worth different amounts in different languages: ${line(hi)}, while ${line(lo)}${c.english ? `, against ${Fmt.money(copies * c.basePrice, 'USD')} in English at the ${Fmt.money(c.basePrice, 'USD')} base price` : ''}.`
+            + (flipped ? ` That is why ${flip.language} ranks above ${flipped.language} here even though ${flipped.language} has more reviews.` : '');
+    }
+    renderBody() {
+        const c = this.ctx, S = RecContext.SOURCES, L = s => RecContext.link(s.label, s.url);
+        const card = (title, paras, wide = false) => `<article class="info-card${wide ? ' wide' : ''}"><h3>${esc(title)}</h3>${paras.filter(Boolean).map(p => `<p>${p}</p>`).join('')}</article>`;
+        const sources = [
+            ...c.titles.map((t, i) => (c.links[i] ? `<li>${c.titleHtml(i)}, Steam store page</li>` : '')),
+            `<li>${L(S.reviewsApi)}: review counts per language, all reviews including off-topic periods</li>`,
+            `<li>${L(S.pricing)}: how the three price conversions work</li>`,
+            `<li>${L(S.explorer)}: Steam's regional price recommendations and what comparable games charge</li>`,
+            `<li>${L(S.currencies)}: the currencies Steam sells in</li>`,
+            `<li>${L(S.nbNumber)}: sales per review on Steam</li>`,
+        ].filter(Boolean).join('');
+        return `<div class="card-grid cols-2 rec-method">
+          ${card('The formula', [
+            `<b>${esc(c.formula())}</b>.`,
+            `Average reviews per title is the mean review count in a language across ${c.titlesHtml()}. Each language is priced in its main Steam market: English in US dollars, euro-market languages in euros, Simplified Chinese in yuan, Brazilian Portuguese in reals, and so on.`,
+        ])}
+          ${card(`Why × ${Fmt.int(c.perReview)}: reviews and sales`, [
+            `Steam does not publish sales, but review counts are public. The "Boxleiter number" estimates sales as reviews times a ratio. ${L(S.nbNumber)} surveyed 237 Steam games: an average of 63 sales per review (median 58), and 41 (median 38) for games launched in 2020.`,
+            `Ratios fell after Steam began prompting players to review in late 2019, and recent launches range from about 20 to 60. ${Fmt.int(c.perReview)} sits at the cautious end, so these figures lean low; genre, price and age move the ratio.`,
+        ])}
+          ${card('How multi-variable pricing works', [
+            `Steam's pricing tool turns one US price into every currency three ways (${L(S.pricing)}): at the exchange rate only, by purchasing power only, or with the multi-variable method, which combines local purchasing power, what comparable entertainment costs locally, and the exchange rate. This report uses the multi-variable price, the one Steam recommends as a starting point.`,
+            `To check prices before setting them, the ${L(S.explorer)} shows Steam's recommendations next to what other games charge in each region.`,
+        ])}
+          ${card('Same copies, different revenue', [
+            this.example(),
+            'A language with fewer players can still bring in more than a larger one when its market pays more per copy, so the ranking weighs both the size of the audience and the price it pays.',
+        ])}
+          ${card('What the figures leave out', [
+            "Value-added tax and Steam's revenue share (30% by default) are not deducted, and neither are refunds, discounts, bundles or the cost of localizing. Each language counts only its main market, although speakers buy in many countries.",
+            'Read the figures as a ranking and an order of magnitude for planning, not as a sales forecast.',
+        ])}
+          ${card('Sources', [`<ul class="rec-sources">${sources}</ul>`])}
+        </div>`;
     }
 }
 class RecCoverPage extends CoverPage {
@@ -3751,7 +3788,7 @@ class RecCoverPage extends CoverPage {
     get lede() { return `Potential revenue per language from ${Words.count(this.analysis.titles.length, 'comparable title')} and Steam's regional price recommendation.`; }
     get metaItems() { return [['Base price', Fmt.money(this.analysis.basePrice, 'USD')], ['Sales per review', Fmt.int(this.analysis.perReview)]]; }
 }
-const REC_SECTION_REGISTRY = [RecSummarySection, RecRevenueSection, RecReviewsSection, RecPricesSection, RecMethodSection];
+const REC_SECTION_REGISTRY = [RecReviewsSection, RecSummarySection, RecRevenueSection, RecMethodSection];
 class RecDocument {
     constructor(ctx) { this.ctx = ctx; }
     mount(container) {
@@ -3902,11 +3939,11 @@ class RecForm {
     /** Steam games first, then any pasted titles; languages merged by name, a missing language counts as 0. */
     get reviews() {
         const pasted = RecReviews.parse(this.f.reviews.value);
-        const titles = [], cols = [], names = new Map();
+        const titles = [], links = [], cols = [], names = new Map();
         const name = n => { const k = RecMarkets.key(n); if (!names.has(k)) names.set(k, n); return k; };
-        this.games.forEach(g => { titles.push(g.name); cols.push(new Map(g.langs.map(l => [name(l.language), l.count]))); });
+        this.games.forEach(g => { titles.push(g.name); links.push(`https://store.steampowered.com/app/${g.appId}/`); cols.push(new Map(g.langs.map(l => [name(l.language), l.count]))); });
         if (pasted)
-            pasted.titles.forEach((t, i) => { titles.push(t); cols.push(new Map(pasted.langs.map(l => [name(l.language), l.counts[i]]))); });
+            pasted.titles.forEach((t, i) => { titles.push(t); links.push(''); cols.push(new Map(pasted.langs.map(l => [name(l.language), l.counts[i]]))); });
         if (!titles.length)
             return null;
         const fromPaste = new Map(pasted ? pasted.langs.map(l => [RecMarkets.key(l.language), l]) : []);
@@ -3920,7 +3957,7 @@ class RecForm {
                 covered: !!(p && p.covered),
             };
         }).filter(l => l.counts.some(n => n > 0));
-        return { project: pasted ? pasted.project : '', titles, langs };
+        return { project: pasted ? pasted.project : '', titles, links, langs };
     }
     get prices() { return RecPrices.parse(this.f.prices.value); }
     get basePrice() { return RecPrices.amount(this.f.base.value); }
